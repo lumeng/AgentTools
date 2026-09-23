@@ -4,6 +4,7 @@ BeginPackage[ "Wolfram`AgentTools`Common`" ];
 `$catching;
 `$catchTopTag;
 `$cloudNotebooks;
+`$commandLineArguments;
 `$debug;
 `$defaultMCPServer;
 `$deployCloudNotebooks;
@@ -18,6 +19,7 @@ BeginPackage[ "Wolfram`AgentTools`Common`" ];
 `$storagePath;
 `$supportedMCPClients;
 `$thisPaclet;
+`$wolframCommand;
 `addToMXInitialization;
 `beginDefinition;
 `binarySerializeWithDefinitions;
@@ -71,6 +73,7 @@ BeginPackage[ "Wolfram`AgentTools`Common`" ];
 `validateMCPServerObjectData;
 `writeCloudWXF;
 `writeRawJSONFile;
+`writeRawJSONString;
 `writeWXFFile;
 
 (* TOML support for Codex: *)

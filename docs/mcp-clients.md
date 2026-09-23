@@ -600,7 +600,7 @@ Include these environment variables for proper operation:
 | `WOLFRAM_CLOUDBASE` | Set to a cloud base URL (e.g. `"https://www.test.wolframcloud.com"`) to override `$CloudBase` for the server session; cloud URLs in [MCP Apps](mcp-apps.md) assets are rewritten to match (optional, primarily for internal purposes) |
 | `LLMKIT_ENABLED` | Set to `"false"` to make the context tools (`WolframContext`, etc.) behave as if the user has no LLMKit subscription, without emitting subscription warnings (optional) |
 | `MCP_TOOL_OPTIONS` | JSON string of tool option overrides, set automatically by `"ToolOptions"` (optional) |
-| `SUBMIT_USAGE_DATA` | Set to `"false"` to opt out of [anonymous usage data](usage-data.md) collection (or `"true"` to opt a custom server in); set automatically by `"SubmitUsageData"` (optional) |
+| `SUBMIT_USAGE_DATA` | Set to `"false"` to opt out of [usage data](usage-data.md) collection (or `"true"` to opt a custom server in); set automatically by `"SubmitUsageData"` (optional) |
 
 ### Getting the Configuration
 
@@ -633,6 +633,37 @@ This is useful for testing local changes without reinstalling the paclet:
 ```wl
 InstallMCPServer["ClaudeCode", "DevelopmentMode" -> True]
 ```
+
+### WolframCommand
+
+Overrides the executable written to the `command` field of the client configuration:
+
+| Value | Behavior |
+|-------|----------|
+| `Automatic` (default) | The `wolfram` executable inside `$InstallationDirectory` for the current operating system |
+| `"path/to/executable"` | Written verbatim as the `command` field |
+
+This lets a client launch a standalone executable or wrapper script instead of the local Wolfram kernel. Pair it with `"CommandLineArguments"` when that executable does not accept the default kernel arguments:
+
+```wl
+InstallMCPServer["ClaudeCode", "WolframLanguage",
+    "WolframCommand"       -> "/usr/local/bin/wolfram-mcp",
+    "CommandLineArguments" -> {}
+]
+```
+
+Any other value fails with `InstallMCPServer::InvalidWolframCommand`.
+
+### CommandLineArguments
+
+Overrides the argument list written to the `args` field of the client configuration:
+
+| Value | Behavior |
+|-------|----------|
+| `Automatic` (default) | The standard kernel arguments that start the server: `-run "PacletSymbol[...][]" -noinit -noprompt` |
+| `{"arg1", "arg2", ...}` | Written verbatim as the `args` field; an empty list is allowed |
+
+The value must be a list of strings — MCP clients expect `args` to be a JSON array, so a single string fails with `InstallMCPServer::InvalidCommandLineArguments`. A non-`False` `"DevelopmentMode"` replaces the arguments with its own, so it takes precedence over this option.
 
 ### ProcessEnvironment
 
@@ -704,7 +735,7 @@ UninstallMCPServer["ClaudeDesktop", "WolframLanguage", "MCPServerName" -> "Wolfr
 
 ### SubmitUsageData
 
-Controls whether the installed server collects and submits [anonymous usage data](usage-data.md) — which MCP client is used, which tools and prompts are called, and whether each call succeeded, never any content:
+Controls whether the installed server collects and submits [usage data](usage-data.md) — which MCP client is used, which tools and prompts are called, and whether each call succeeded, together with the product identity information of the Wolfram installation (license, machine ID, product, release, and so on), but never any content:
 
 | Value | Behavior |
 |-------|----------|
