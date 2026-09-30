@@ -171,6 +171,23 @@ $supportedMCPClients = <|
         "URL"             -> "https://github.com/features/copilot/cli",
         "InstallLocation" :> { $HomeDirectory, ".copilot", "mcp-config.json" }
     |>,
+    (* DeepSeek Harness (dsh) composes its plugin tree from Cordis patch layers. The
+       home-level layer ($DSH_HOME/cordis.patch.yml, default ~/.dsh/cordis.patch.yml)
+       applies to every profile, so each MCP server becomes one `insert` patch entry
+       loading the `@deepseek-ai/dsh-mcp-client` plugin. The file is a top-level YAML
+       array that commonly holds `!!js` tags our YAML parser cannot round-trip, so the
+       dedicated install overload edits it as text (see installMCPServer). There is no
+       project-scoped config file that dsh discovers on its own, so no ProjectPath. *)
+    "DeepSeekHarness" -> <|
+        "DisplayName"     -> "DeepSeek Harness",
+        "DefaultToolset"  -> "WolframLanguage",
+        "Aliases"         -> { "DeepSeek", "DSH" },
+        "ConfigFormat"    -> "YAML",
+        "ConfigKey"       -> { },
+        "ServerConverter" -> convertToDeepSeekHarnessFormat,
+        "URL"             -> "https://github.com/deepseek-ai/deepseek-harness",
+        "InstallLocation" :> deepSeekHarnessInstallLocation[ ]
+    |>,
     "Junie" -> <|
         "DisplayName"     -> "Junie",
         "DefaultToolset"  -> "WolframLanguage",

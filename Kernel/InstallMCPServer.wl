@@ -332,6 +332,49 @@ installMCPServer[ target0_File, obj_MCPServerObject, env_Association, verifyLLMK
     throwInternalFailure
 ];
 
+(* DeepSeek Harness: the target is a Cordis patch layer (a top-level YAML array of patch
+   entries). Each server is one `insert` patch adding a `@deepseek-ai/dsh-mcp-client`
+   row. User patch files routinely carry `!!js` tags and `[]` roots that our YAML
+   parser cannot round-trip, so instead of parse-and-rewrite we own a marker-delimited
+   block per server and leave every other byte of the file untouched. *)
+installMCPServer[ target0_File, obj_MCPServerObject, env_Association, verifyLLMKit_, devMode_ ] /; $installClientName === "DeepSeekHarness" := Enclose[
+    Module[ { target, name, configName, json, data, server, convert, serverName, block, lines },
+
+        If[ verifyLLMKit, ConfirmMatch[ checkLLMKitRequirements @ obj, _String|None, "LLMKitCheck" ] ];
+        initializeTools @ obj;
+        Confirm[ validatePacletServerDefinitions @ obj, "ValidatePacletServerDefinitions" ];
+
+        target     = ConfirmBy[ ensureFilePath @ target0, fileQ, "Target" ];
+        name       = ConfirmBy[ obj[ "Name" ], StringQ, "Name" ];
+        configName = ConfirmBy[ resolveMCPServerName @ obj, StringQ, "ConfigName" ];
+        json       = ConfirmBy[ obj[ "JSONConfiguration" ], StringQ, "JSONConfiguration" ];
+        data       = ConfirmBy[ Developer`ReadRawJSONString @ json, AssociationQ, "JSONConfiguration" ];
+        server     = ConfirmBy[ addEnvironmentVariables[ data[ "mcpServers", name ], env ], AssociationQ, "Server" ];
+        If[ devMode =!= False,
+            server[ "args" ] = ConfirmMatch[ makeDevelopmentArgs @ devMode, { __String }, "DevelopmentArgs" ]
+        ];
+
+        convert    = serverConverter @ $installClientName;
+        server     = ConfirmBy[ convert @ server, AssociationQ, "DeepSeekHarnessServer" ];
+        serverName = ConfirmBy[ toDSHServerName @ configName, StringQ, "ServerName" ];
+        server     = Insert[ server, "serverName" -> serverName, 2 ];
+
+        block = ConfirmBy[ dshPatchBlock[ configName, serverName, server ], StringQ, "Block" ];
+        lines = ConfirmMatch[ readDSHPatchLines @ target, { ___String }, "Lines" ];
+        lines = First @ ConfirmMatch[ removeDSHPatchBlock[ lines, configName, target ], { { ___String }, _ }, "Remove" ];
+        lines = ConfirmMatch[ prepareDSHPatchLines[ lines, target ], { ___String }, "Prepare" ];
+        lines = Join[ lines, If[ lines === { }, { }, { "" } ], StringSplit[ block, "\n", All ] ];
+
+        ConfirmBy[ writeDSHPatchLines[ target, lines ], fileQ, "Export" ];
+
+        clearStaleBuiltInRecords[ target, configName, obj ];
+        ConfirmBy[ recordMCPInstallation[ target, obj ], FileExistsQ, "Record" ];
+
+        installSuccess[ name, target, obj ]
+    ],
+    throwInternalFailure
+];
+
 (* Augment Code VS Code extension: mcpServers.json is a flat JSON array at the root,
    not an object with an "mcpServers" key. Each entry has its own "name" field. *)
 installMCPServer[ target0_File, obj_MCPServerObject, env_Association, verifyLLMKit_, devMode_ ] /; $installClientName === "AugmentCodeIDE" := Enclose[
