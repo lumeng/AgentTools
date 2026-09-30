@@ -1609,6 +1609,33 @@ uninstallMCPServer[ target0_File, obj_MCPServerObject ] /; $installClientName ==
     throwInternalFailure
 ];
 
+(* DeepSeek Harness: remove our marker-delimited block. dsh rejects a patch file that is
+   empty or comment-only (it must parse as a YAML array), so if nothing else is left we
+   leave an explicit empty sequence behind. *)
+uninstallMCPServer[ target0_File, obj_MCPServerObject ] /; $installClientName === "DeepSeekHarness" := Enclose[
+    Catch @ Module[ { target, name, configName, lines, removed },
+
+        target = ConfirmBy[ ensureFilePath @ target0, fileQ, "Target" ];
+        If[ ! FileExistsQ @ target, Throw @ Missing[ "NotInstalled", target ] ];
+
+        name       = ConfirmBy[ obj[ "Name" ], StringQ, "Name" ];
+        configName = ConfirmBy[ resolveMCPServerName @ obj, StringQ, "ConfigName" ];
+
+        lines = ConfirmMatch[ readDSHPatchLines @ target, { ___String }, "Lines" ];
+        { lines, removed } = ConfirmMatch[ removeDSHPatchBlock[ lines, configName, target ], { { ___String }, _ }, "Remove" ];
+        If[ ! TrueQ @ removed, Throw @ Missing[ "NotInstalled", target ] ];
+
+        lines = dropTrailingBlankLines @ lines;
+        If[ dshContentLines @ lines === { }, lines = Append[ lines, "[]" ] ];
+
+        ConfirmBy[ writeDSHPatchLines[ target, lines ], fileQ, "Export" ];
+        ConfirmMatch[ clearRecordedInstallation[ target, obj ], { ___Association }, "Clear" ];
+
+        uninstallSuccess[ name, target, obj ]
+    ],
+    throwInternalFailure
+];
+
 uninstallMCPServer[ target0_File, obj_MCPServerObject ] /; $installClientName === "Goose" := Enclose[
     Catch @ Module[ { target, name, configName, existing, extensions },
 
