@@ -1218,6 +1218,187 @@ readExistingContinueConfig[ file_ ] := Enclose[
 readExistingContinueConfig // endDefinition;
 
 (* ::**************************************************************************************************************:: *)
+(* ::Subsection::Closed:: *)
+(*DeepSeek Harness Patch Files*)
+(* dsh patch layers are top-level YAML arrays of Cordis patch entries that users edit by
+   hand, typically with `!!js` expressions. We never parse and rewrite them: each server
+   lives in its own marker-delimited block (one `insert` patch entry), and install and
+   uninstall only add or remove that block. *)
+$dshPluginName = "@deepseek-ai/dsh-mcp-client";
+
+(* ::**************************************************************************************************************:: *)
+(* ::Subsubsection::Closed:: *)
+(*toDSHServerName*)
+(* dsh-mcp-client requires serverName to match [A-Za-z0-9_-]{1,32}; it namespaces the
+   model-facing tool names (mcp__<serverName>__<tool>). *)
+toDSHServerName // beginDefinition;
+
+toDSHServerName[ name_String ] :=
+    Replace[
+        StringTake[ StringReplace[ name, RegularExpression[ "[^A-Za-z0-9_-]" ] -> "_" ], UpTo[ 32 ] ],
+        "" -> "Wolfram"
+    ];
+
+toDSHServerName // endDefinition;
+
+(* ::**************************************************************************************************************:: *)
+(* ::Subsubsection::Closed:: *)
+(*dshBlockMarkers*)
+dshBlockMarkers // beginDefinition;
+
+dshBlockMarkers[ configName_String ] := {
+    "# >>> AgentTools MCP server \"" <> configName <> "\" (managed by InstallMCPServer; do not edit) >>>",
+    "# <<< AgentTools MCP server \"" <> configName <> "\" <<<"
+};
+
+dshBlockMarkers // endDefinition;
+
+(* ::**************************************************************************************************************:: *)
+(* ::Subsubsection::Closed:: *)
+(*dshPatchBlock*)
+dshPatchBlock // beginDefinition;
+
+dshPatchBlock[ configName_String, serverName_String, config_Association ] := Enclose[
+    Module[ { patches, yaml, markers },
+        patches = {
+            <|
+                "insert" -> {
+                    <|
+                        "id"     -> "agenttools-" <> serverName,
+                        "name"   -> $dshPluginName,
+                        "config" -> config
+                    |>
+                }
+            |>
+        };
+        yaml = ConfirmBy[ exportYAMLString @ patches, StringQ, "YAML" ];
+        ConfirmAssert[ importYAMLString @ yaml === patches, "RoundTrip" ];
+        markers = dshBlockMarkers @ configName;
+        StringRiffle[ { First @ markers, StringTrim[ yaml, "\n".. ], Last @ markers }, "\n" ]
+    ],
+    throwInternalFailure
+];
+
+dshPatchBlock // endDefinition;
+
+(* ::**************************************************************************************************************:: *)
+(* ::Subsubsection::Closed:: *)
+(*readDSHPatchLines*)
+(* Lines are kept verbatim (including any trailing "\r") so rewriting the file does not
+   touch content outside our blocks. *)
+readDSHPatchLines // beginDefinition;
+
+readDSHPatchLines[ file_ ] := Enclose[
+    Catch @ Module[ { path, bytes, lines },
+        path = ConfirmBy[ ExpandFileName @ file, StringQ, "Path" ];
+        If[ ! FileExistsQ @ path, Throw @ { } ];
+        bytes = ReadByteArray @ path;
+        If[ ! ByteArrayQ @ bytes, Throw @ { } ];
+        lines = StringSplit[ ConfirmBy[ ByteArrayToString[ bytes, "UTF-8" ], StringQ, "String" ], "\n", All ];
+        If[ lines =!= { } && Last @ lines === "", Most @ lines, lines ]
+    ],
+    throwInternalFailure
+];
+
+readDSHPatchLines // endDefinition;
+
+(* ::**************************************************************************************************************:: *)
+(* ::Subsubsection::Closed:: *)
+(*removeDSHPatchBlock*)
+(* Returns { remainingLines, removedQ }. A begin marker without a matching end marker
+   means the file was hand-edited in a way we cannot safely repair, so we refuse. *)
+removeDSHPatchBlock // beginDefinition;
+
+removeDSHPatchBlock[ lines0: { ___String }, configName_String, file_ ] :=
+    Module[ { begin, end, lines, removed, i, j },
+        { begin, end } = dshBlockMarkers @ configName;
+        lines   = lines0;
+        removed = False;
+        While[ IntegerQ[ i = FirstPosition[ StringTrim @ lines, begin, { None }, { 1 } ][[ 1 ]] ],
+            j = FirstPosition[ StringTrim @ Drop[ lines, i ], end, { None }, { 1 } ][[ 1 ]];
+            If[ ! IntegerQ @ j, throwFailure[ "InvalidMCPConfiguration", file ] ];
+            lines = Drop[ lines, { i, i + j } ];
+            (* Drop the blank separator line that install puts before each block *)
+            If[ i > 1 && StringTrim @ lines[[ i - 1 ]] === "", lines = Drop[ lines, { i - 1 } ] ];
+            removed = True
+        ];
+        { lines, removed }
+    ];
+
+removeDSHPatchBlock // endDefinition;
+
+(* ::**************************************************************************************************************:: *)
+(* ::Subsubsection::Closed:: *)
+(*dshContentLines*)
+(* Lines that carry YAML content: not blank, not a comment, not a document marker. *)
+dshContentLines // beginDefinition;
+dshContentLines[ lines: { ___String } ] := Select[ lines, ! StringMatchQ[ StringTrim @ #, "" | "---" | ("#" ~~ ___) ] & ];
+dshContentLines // endDefinition;
+
+(* ::**************************************************************************************************************:: *)
+(* ::Subsubsection::Closed:: *)
+(*prepareDSHPatchLines*)
+(* Makes the remaining lines safe to append a block-style sequence item to. An empty
+   flow sequence `[]` (the natural "no patches" file) is dropped since our block replaces
+   it. Any other root that is not a block sequence (a flow list, a mapping, a scalar)
+   cannot be extended by appending text, so we refuse rather than corrupt it. *)
+prepareDSHPatchLines // beginDefinition;
+
+prepareDSHPatchLines[ lines0: { ___String }, file_ ] :=
+    Module[ { lines, content },
+        lines   = lines0;
+        content = dshContentLines @ lines;
+        Which[
+            content === { },
+                Null,
+            AllTrue[ content, dshEmptyFlowSequenceQ ],
+                lines = DeleteCases[ lines, _? dshEmptyFlowSequenceQ ],
+            StringMatchQ[ First @ content, "-" ~~ ("" | (WhitespaceCharacter ~~ ___)) ],
+                Null,
+            True,
+                throwFailure[ "InvalidMCPConfiguration", file ]
+        ];
+        dropTrailingBlankLines @ lines
+    ];
+
+prepareDSHPatchLines // endDefinition;
+
+(* ::**************************************************************************************************************:: *)
+(* ::Subsubsection::Closed:: *)
+(*dshEmptyFlowSequenceQ*)
+dshEmptyFlowSequenceQ // beginDefinition;
+dshEmptyFlowSequenceQ[ line_String ] := StringMatchQ[ line, RegularExpression[ "\\s*\\[\\s*\\]\\s*(#.*)?\\r?" ] ];
+dshEmptyFlowSequenceQ // endDefinition;
+
+(* ::**************************************************************************************************************:: *)
+(* ::Subsubsection::Closed:: *)
+(*dropTrailingBlankLines*)
+dropTrailingBlankLines // beginDefinition;
+dropTrailingBlankLines[ { most___String, last_String } ] /; StringTrim @ last === "" := dropTrailingBlankLines @ { most };
+dropTrailingBlankLines[ lines: { ___String } ] := lines;
+dropTrailingBlankLines // endDefinition;
+
+(* ::**************************************************************************************************************:: *)
+(* ::Subsubsection::Closed:: *)
+(*writeDSHPatchLines*)
+writeDSHPatchLines // beginDefinition;
+
+writeDSHPatchLines[ file_, lines: { ___String } ] := Enclose[
+    Module[ { path, stream },
+        path   = ConfirmBy[ ExpandFileName @ ensureFilePath @ file, StringQ, "Path" ];
+        stream = ConfirmMatch[ OpenWrite[ path, CharacterEncoding -> "UTF-8" ], _OutputStream, "Stream" ];
+        WithCleanup[
+            WriteString[ stream, StringRiffle[ lines, "\n" ] <> "\n" ],
+            Close @ stream
+        ];
+        File @ path
+    ],
+    throwInternalFailure
+];
+
+writeDSHPatchLines // endDefinition;
+
+(* ::**************************************************************************************************************:: *)
 (* ::Section::Closed:: *)
 (*UninstallMCPServer*)
 UninstallMCPServer // beginDefinition;
