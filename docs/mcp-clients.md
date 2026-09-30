@@ -25,6 +25,7 @@ The following clients have built-in support for automatic configuration via `Ins
 | Continue | `"Continue"` | — | YAML | Yes | `"WolframLanguage"` |
 | Copilot CLI | `"CopilotCLI"` | `"Copilot"` | JSON | No | `"WolframLanguage"` |
 | Cursor | `"Cursor"` | — | JSON | No | `"WolframLanguage"` |
+| DeepSeek Harness | `"DeepSeekHarness"` | `"DeepSeek"`, `"DSH"` | YAML | No | `"WolframLanguage"` |
 | Gemini CLI | `"GeminiCLI"` | `"Gemini"` | JSON | No | `"WolframLanguage"` |
 | Goose | `"Goose"` | — | YAML | No | `"Wolfram"` |
 | Antigravity (IDE, desktop + CLI) | `"Antigravity"` | `"GoogleAntigravity"`, `"AntigravityCLI"`, `"GoogleAntigravityCLI"` | JSON | Yes | `"WolframLanguage"` |
@@ -253,6 +254,39 @@ Note: Copilot CLI requires the `tools` field to specify which tools to enable. `
 | Global | `~/.cursor/mcp.json` |
 
 **Format:** Same as Claude Desktop (`mcpServers` key).
+
+### DeepSeek Harness
+
+| Scope | Config Location |
+|-------|----------------|
+| User (all profiles) | `$DSH_HOME/cordis.patch.yml` (default `~/.dsh/cordis.patch.yml`) |
+
+**Format (YAML, a Cordis patch layer):**
+```yaml
+# >>> AgentTools MCP server "ServerName" (managed by InstallMCPServer; do not edit) >>>
+- insert:
+    - id: agenttools-ServerName
+      name: "@deepseek-ai/dsh-mcp-client"
+      config:
+        transport: stdio
+        serverName: ServerName
+        command: ...
+        args: ["...", "..."]
+        env:
+          KEY: value
+        toolCallTimeoutMs: 300000
+# <<< AgentTools MCP server "ServerName" <<<
+```
+
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) builds its plugin tree from Cordis patch layers. The home-level layer `$DSH_HOME/cordis.patch.yml` applies to every profile (`web`, `headless`, and custom ones), so `InstallMCPServer["DeepSeekHarness", ...]` adds one `insert` patch there that loads the `@deepseek-ai/dsh-mcp-client` plugin. The model sees the tools as `mcp__<serverName>__<tool>` (e.g. `mcp__Wolfram__WolframLanguageEvaluator`).
+
+Notes:
+- The file is a top-level YAML array that users edit by hand, often with `!!js` expressions. `InstallMCPServer` never parses and rewrites it: each server is a block delimited by the marker comments shown above, and install/uninstall only add, replace, or remove that block. An empty `[]` root is replaced by the block, and uninstalling the last server leaves `[]` behind (dsh rejects an empty or comment-only patch file). A root that is not a block sequence is reported as `InvalidMCPConfiguration` instead of being modified.
+- `serverName` must match `[A-Za-z0-9_-]{1,32}`; other characters in the configuration name are replaced with `_`.
+- `toolCallTimeoutMs` is raised from the plugin's 60-second default to 300 seconds, so a cold kernel start or a slow Wolfram|Alpha query does not time out.
+- The stdio bridge drops ambient environment variables whose names contain `KEY`, `PASSWORD`, `SECRET`, or `TOKEN` (and all `DSH_*` variables) before starting the server; the variables written into the `env` block are always passed.
+- A per-profile layer (`$DSH_HOME/profiles/<name>/cordis.patch.yml`) or a `dsh --patch` overlay file can be targeted with `InstallMCPServer[File[...], ..., "ApplicationName" -> "DeepSeekHarness"]`; any file named `cordis.patch.yml` is detected automatically. There is no project-scoped configuration file.
+- The home layer is read when a profile boots, so restart `dsh` after installing. Inspect the composed tree with `dsh --profile web --dump-config`.
 
 ### Gemini CLI
 
