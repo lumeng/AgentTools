@@ -730,6 +730,7 @@ guessClientName[ file_? fileQ ] := Enclose[
             { __, ".junie", "mcp", "mcp.json" }, Throw[ "Junie" ],
             { __, ".kimi", "mcp.json" }, Throw[ "KimiCode" ],
             { __, ".qwen", "settings.json" }, Throw[ "QwenCode" ],
+            { __, "cordis.patch.yml" }, Throw[ "DeepSeekHarness" ],
             { __, ".continue", "config.yaml" }, Throw[ "Continue" ],
             { __, ".continue", "mcpservers", _ }, Throw[ "Continue" ],
             { __, ".lmstudio", "mcp.json" }, Throw[ "LMStudio" ],
