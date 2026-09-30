@@ -42,6 +42,7 @@ Replace `<ClientName>` with one of the supported clients:
 | Continue | `"Continue"` |
 | Copilot CLI | `"CopilotCLI"` |
 | Cursor | `"Cursor"` |
+| DeepSeek Harness | `"DeepSeekHarness"` |
 | Gemini CLI | `"GeminiCLI"` |
 | Junie | `"Junie"` |
 | Kimi Code | `"KimiCode"` |
