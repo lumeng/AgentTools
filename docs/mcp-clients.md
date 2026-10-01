@@ -25,6 +25,7 @@ The following clients have built-in support for automatic configuration via `Ins
 | Continue | `"Continue"` | — | YAML | Yes | `"WolframLanguage"` |
 | Copilot CLI | `"CopilotCLI"` | `"Copilot"` | JSON | No | `"WolframLanguage"` |
 | Cursor | `"Cursor"` | — | JSON | No | `"WolframLanguage"` |
+| DeepSeek Harness | `"DeepSeekHarness"` | `"DeepSeek"`, `"DSH"` | YAML | No | `"WolframLanguage"` |
 | Gemini CLI | `"GeminiCLI"` | `"Gemini"` | JSON | No | `"WolframLanguage"` |
 | Goose | `"Goose"` | — | YAML | No | `"Wolfram"` |
 | Antigravity (IDE, desktop + CLI) | `"Antigravity"` | `"GoogleAntigravity"`, `"AntigravityCLI"`, `"GoogleAntigravityCLI"` | JSON | Yes | `"WolframLanguage"` |
@@ -253,6 +254,39 @@ Note: Copilot CLI requires the `tools` field to specify which tools to enable. `
 | Global | `~/.cursor/mcp.json` |
 
 **Format:** Same as Claude Desktop (`mcpServers` key).
+
+### DeepSeek Harness
+
+| Scope | Config Location |
+|-------|----------------|
+| User (all profiles) | `$DSH_HOME/cordis.patch.yml` (default `~/.dsh/cordis.patch.yml`) |
+
+**Format (YAML, a Cordis patch layer):**
+```yaml
+# >>> AgentTools MCP server "ServerName" (managed by InstallMCPServer; do not edit) >>>
+- insert:
+    - id: agenttools-ServerName
+      name: "@deepseek-ai/dsh-mcp-client"
+      config:
+        transport: stdio
+        serverName: ServerName
+        command: ...
+        args: ["...", "..."]
+        env:
+          KEY: value
+        toolCallTimeoutMs: 300000
+# <<< AgentTools MCP server "ServerName" <<<
+```
+
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) builds its plugin tree from Cordis patch layers. The home-level layer `$DSH_HOME/cordis.patch.yml` applies to every profile (`web`, `headless`, and custom ones), so `InstallMCPServer["DeepSeekHarness", ...]` adds one `insert` patch there that loads the `@deepseek-ai/dsh-mcp-client` plugin. The model sees the tools as `mcp__<serverName>__<tool>` (e.g. `mcp__Wolfram__WolframLanguageEvaluator`).
+
+Notes:
+- The file is a top-level YAML array that users edit by hand, often with `!!js` expressions. `InstallMCPServer` never parses and rewrites it: each server is a block delimited by the marker comments shown above, and install/uninstall only add, replace, or remove that block. An empty `[]` root is replaced by the block, and uninstalling the last server leaves `[]` behind (dsh rejects an empty or comment-only patch file). A root that is not a block sequence is reported as `InvalidMCPConfiguration` instead of being modified.
+- `serverName` must match `[A-Za-z0-9_-]{1,32}`; other characters in the configuration name are replaced with `_`.
+- `toolCallTimeoutMs` is raised from the plugin's 60-second default to 300 seconds, so a cold kernel start or a slow Wolfram|Alpha query does not time out.
+- The stdio bridge drops ambient environment variables whose names contain `KEY`, `PASSWORD`, `SECRET`, or `TOKEN` (and all `DSH_*` variables) before starting the server; the variables written into the `env` block are always passed.
+- A per-profile layer (`$DSH_HOME/profiles/<name>/cordis.patch.yml`) or a `dsh --patch` overlay file can be targeted with `InstallMCPServer[File[...], ..., "ApplicationName" -> "DeepSeekHarness"]`; any file named `cordis.patch.yml` is detected automatically. There is no project-scoped configuration file.
+- The home layer is read when a profile boots, so restart `dsh` after installing. Inspect the composed tree with `dsh --profile web --dump-config`.
 
 ### Gemini CLI
 
@@ -576,7 +610,7 @@ Include these environment variables for proper operation:
 | `WOLFRAM_CLOUDBASE` | Set to a cloud base URL (e.g. `"https://www.test.wolframcloud.com"`) to override `$CloudBase` for the server session; cloud URLs in [MCP Apps](mcp-apps.md) assets are rewritten to match (optional, primarily for internal purposes) |
 | `LLMKIT_ENABLED` | Set to `"false"` to make the context tools (`WolframContext`, etc.) behave as if the user has no LLMKit subscription, without emitting subscription warnings (optional) |
 | `MCP_TOOL_OPTIONS` | JSON string of tool option overrides, set automatically by `"ToolOptions"` (optional) |
-| `SUBMIT_USAGE_DATA` | Set to `"false"` to opt out of [anonymous usage data](usage-data.md) collection (or `"true"` to opt a custom server in); set automatically by `"SubmitUsageData"` (optional) |
+| `SUBMIT_USAGE_DATA` | Set to `"false"` to opt out of [usage data](usage-data.md) collection (or `"true"` to opt a custom server in); set automatically by `"SubmitUsageData"` (optional) |
 
 ### Getting the Configuration
 
@@ -609,6 +643,37 @@ This is useful for testing local changes without reinstalling the paclet:
 ```wl
 InstallMCPServer["ClaudeCode", "DevelopmentMode" -> True]
 ```
+
+### WolframCommand
+
+Overrides the executable written to the `command` field of the client configuration:
+
+| Value | Behavior |
+|-------|----------|
+| `Automatic` (default) | The `wolfram` executable inside `$InstallationDirectory` for the current operating system |
+| `"path/to/executable"` | Written verbatim as the `command` field |
+
+This lets a client launch a standalone executable or wrapper script instead of the local Wolfram kernel. Pair it with `"CommandLineArguments"` when that executable does not accept the default kernel arguments:
+
+```wl
+InstallMCPServer["ClaudeCode", "WolframLanguage",
+    "WolframCommand"       -> "/usr/local/bin/wolfram-mcp",
+    "CommandLineArguments" -> {}
+]
+```
+
+Any other value fails with `InstallMCPServer::InvalidWolframCommand`.
+
+### CommandLineArguments
+
+Overrides the argument list written to the `args` field of the client configuration:
+
+| Value | Behavior |
+|-------|----------|
+| `Automatic` (default) | The standard kernel arguments that start the server: `-run "PacletSymbol[...][]" -noinit -noprompt` |
+| `{"arg1", "arg2", ...}` | Written verbatim as the `args` field; an empty list is allowed |
+
+The value must be a list of strings — MCP clients expect `args` to be a JSON array, so a single string fails with `InstallMCPServer::InvalidCommandLineArguments`. A non-`False` `"DevelopmentMode"` replaces the arguments with its own, so it takes precedence over this option.
 
 ### ProcessEnvironment
 
@@ -680,7 +745,7 @@ UninstallMCPServer["ClaudeDesktop", "WolframLanguage", "MCPServerName" -> "Wolfr
 
 ### SubmitUsageData
 
-Controls whether the installed server collects and submits [anonymous usage data](usage-data.md) — which MCP client is used, which tools and prompts are called, and whether each call succeeded, never any content:
+Controls whether the installed server collects and submits [usage data](usage-data.md) — which MCP client is used, which tools and prompts are called, and whether each call succeeded, together with the product identity information of the Wolfram installation (license, machine ID, product, release, and so on), but never any content:
 
 | Value | Behavior |
 |-------|----------|

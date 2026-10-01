@@ -2,7 +2,7 @@
 
 ## Overview
 
-Basic, anonymous usage tracking for the built-in local MCP servers, so that we can learn which MCP clients people use (to prioritize client support) and which tools and prompts get used (to understand feature usage). Nothing about the *content* of a session is ever recorded.
+Basic usage tracking for the built-in local MCP servers, so that we can learn which MCP clients people use (to prioritize client support), which tools and prompts get used (to understand feature usage), and from which Wolfram products, versions, and installations. Nothing about the *content* of a session is ever recorded. The data is not anonymous: each session carries the product identity information (license, activation key, machine ID, ...) that the paclet manager already sends with every request to the paclet server.
 
 User-facing documentation: [docs/usage-data.md](../docs/usage-data.md).
 
@@ -10,6 +10,7 @@ User-facing documentation: [docs/usage-data.md](../docs/usage-data.md).
 
 - Record, per local server session, the client information from `initialize` and one event per `tools/call` and `prompts/get` request (name, success, timestamp).
 - Never record tool or prompt arguments, results, or any other content.
+- Record the product identity information that the paclet manager sends to the paclet server (`` PacletManager`Package`$productIdentityHeaders ``) — and nothing more about the user or machine — so that usage can be related to installations, products, and versions.
 - Enabled by default for the built-in servers; easy to opt out, both programmatically and from the preferences UI.
 - Submit each session's data once, after the session is over, without hitting the endpoint on every request.
 - Never interfere with the server: tracking failures are invisible to the client.
@@ -27,6 +28,10 @@ Events, for `tools/call` and `prompts/get` only:
 
 - `Name` is the requested name only if the server actually has a tool/prompt of that name; otherwise `Null`. A hallucinated name is arbitrary model-generated text and must not be recorded.
 - `Success` is `False` for a tool result with `"isError" -> True`, a JSON-RPC error response, or an internal failure.
+
+Product identity (`$productIdentityInfo`), the same information the paclet manager sends as HTTP headers with every paclet server request: `ActivationKey` (`$ActivationKey`), `CloudUserUUID` (`$CloudUserUUID`; `"None"` without a cloud connection), `Language`, `LicenseID`, `LicenseProcesses`, `LicenseSubprocesses`, `MaxLicenseProcesses`, `MaxLicenseSubprocesses`, `MachineID`, `ProductIDName` and `ReleaseID` (from `SystemInformation["Kernel", ...]`), and `SystemID`. The values are stored as they are and read afresh on every write of the session file; those that JSON cannot represent (`Infinity`, `None`, dates, ...) become strings when the JSON is written (`writeRawJSONString` with the `jsonConvert` conversion function in `Kernel/Files.wl`: dates as ISO 8601 strings in UTC, anything else as its `InputForm` string).
+
+Standalone MCP server: `StandaloneMCPServer` (`$StandaloneMCPServer`, `True` only under the standalone MCP server product — a kernel that only runs the MCP server, without a full Mathematica installation and under its own licensing) and `StandaloneMCPServerInformation` (`$StandaloneMCPServerInformation`, the information that product publishes about itself as an association with string keys; `<| |>` otherwise). Both are exported symbols defined in `Kernel/Server/Server.wl` and Protected like the other exported symbols; the paclet never sets them, the standalone application does after loading the paclet. The information is included as it is (with the same conversion of values that JSON cannot represent), so it must only describe the product.
 
 ## When to Track
 
@@ -51,16 +56,19 @@ The session file is `$rootPath/UsageData/<$mcpSessionID>.wxf`, holding
 
 ```wl
 <|
-    "MCPSessionID"      -> $mcpSessionID,
-    "ServerName"        -> name,
-    "ClientInformation" -> $mcpClientInformation,
-    "Events"            -> Internal`BagPart[ $usageEvents, All ],
-    "PacletVersion"     -> $pacletVersion,
-    "WolframVersion"    -> $Version,
-    "SystemID"          -> $SystemID,
-    "LastUpdated"       -> AbsoluteTime[ TimeZone -> 0 ]
+    "MCPSessionID"                   -> $mcpSessionID,
+    "ServerName"                     -> name,
+    "ClientInformation"              -> $mcpClientInformation,
+    "Events"                         -> Internal`BagPart[ $usageEvents, All ],
+    "StandaloneMCPServer"            -> $StandaloneMCPServer,
+    "StandaloneMCPServerInformation" -> $StandaloneMCPServerInformation,
+    $productIdentityInfo, (* ActivationKey, CloudUserUUID, ..., SystemID, spliced in at the top level *)
+    "PacletVersion"                  -> $pacletVersion,
+    "LastUpdated"                    -> AbsoluteTime[ TimeZone -> 0 ]
 |>
 ```
+
+(`ReleaseID` supersedes the `WolframVersion`/`$Version` field of the first design, and `SystemID` is now part of the product identity information.)
 
 The file is overwritten whenever the client information is set or an event is added. Events are capped at 10,000 per session.
 
@@ -68,7 +76,7 @@ Hooks in the local transport (`Kernel/Server/Local.wl`): `initializeUsageData @ 
 
 ## Where and When It Is Sent
 
-Endpoint: `https://www.wolframcloud.com/obj/wolframai-content/api/1.0/usage`, POST with the session data as a JSON body (`Content-Type: application/json`). A 2xx status means accepted. (The endpoint currently only checks that the body is JSON.)
+Endpoint: `https://www.wolframcloud.com/obj/wolframai-content/api/1.0/usage`, POST with the session data as a JSON body (`Content-Type: application/json`; the body is the UTF-8 bytes of the JSON, `usageDataJSON`). A 2xx status means accepted. (The endpoint currently only checks that the body is JSON.)
 
 We cannot know when a session's last message has arrived, so sessions are submitted by later sessions:
 
@@ -82,13 +90,14 @@ We cannot know when a session's last message has arrived, so sessions are submit
 
 | File | Change |
 |------|--------|
-| `Kernel/Server/UsageData.wl` | New: configuration, session state, `usageDataEnabledQ`, `getGlobalUsageDataSetting`/`setGlobalUsageDataSetting`, `initializeUsageData`, `recordUsageData`, session file, keep-alive task, locked submission |
-| `Kernel/Server/Server.wl` | Declare the shared session symbols and hooks; load the new subcontext |
+| `Kernel/Server/UsageData.wl` | New: configuration, session state, `usageDataEnabledQ`, `getGlobalUsageDataSetting`/`setGlobalUsageDataSetting`, `initializeUsageData`, `recordUsageData`, `$productIdentityInfo`, session file, keep-alive task, locked submission |
+| `Kernel/Server/Server.wl` | Declare the shared session symbols and hooks; define `$StandaloneMCPServer`/`$StandaloneMCPServerInformation`; load the new subcontext |
+| `Kernel/Main.wl`, `PacletInfo.wl` | Export (and protect) `$StandaloneMCPServer` and `$StandaloneMCPServerInformation` |
 | `Kernel/Server/Local.wl` | Call the hooks |
 | `Kernel/DefaultServers.wl` | `"EnableUsageData" -> True` on the four built-in servers |
 | `Kernel/InstallMCPServer.wl` | `"SubmitUsageData"` option, validation, `SUBMIT_USAGE_DATA` in `addEnvironmentVariables` |
 | `Kernel/Messages.wl` | `InvalidSubmitUsageData` |
-| `Kernel/Files.wl` | The global settings file: `$globalSettingsFile`, `readGlobalSettings`, `getGlobalSetting`, `setGlobalSetting` |
+| `Kernel/Files.wl` | The global settings file: `$globalSettingsFile`, `readGlobalSettings`, `getGlobalSetting`, `setGlobalSetting`; `writeRawJSONString` (declared in `Kernel/CommonSymbols.wl`) and the `jsonConvert` conversion function shared with `writeRawJSONFile` |
 | `Kernel/PreferencesContent.wl` | Checkbox reading and writing the global setting; deployments from the panel pass nothing |
 | `FrontEnd/Assets/AgentTools.wl` | `prefsSubmitUsageData` and `prefsSubmitUsageDataDescription` strings (English only until localized) |
 | `Tests/UsageData.wlt` | Unit tests (enabling logic, recording, payload/JSON, keep-alive, staleness, locked submission with a stubbed HTTP call) and server integration tests |
@@ -102,6 +111,9 @@ We cannot know when a session's last message has arrived, so sessions are submit
 - Global settings file: missing/unreadable file counts as no settings, set/get round trip, merge preserves other keys; `getGlobalUsageDataSetting` treats only an explicit `False` as an opt-out; `setGlobalUsageDataSetting` rejects non-booleans; the checkbox's setter writes the file.
 - `initializeUsageData`: session ID always assigned; tasks only when enabled; the global opt-out is read at startup; never fails startup.
 - `recordUsageData`: client information, tool/prompt events, success/failure cases, unknown names recorded as `Null`, no arguments or results in the file, other methods ignored, disabled sessions record nothing, event cap, failure isolation.
+- Product identity information: the expected keys; each value is the kernel's own; values JSON cannot represent (`None`, `Infinity`) are kept in the payload and become strings in the JSON; the fields serialize to JSON (as UTF-8 bytes) and appear in the session file, the JSON payload, and the file written by a real server.
+- Standalone MCP server: the two symbols are exported and protected, default to `False`/`<| |>`, and can be bound; both are stored in the session file as they are and written to JSON with dates as ISO 8601 strings; invalid values fail the payload without propagating, like any other tracking failure; a real (non-standalone) server writes the defaults.
+- JSON writers (`Tests/Files.wlt`): JSON-representable values as usual, everything else as `InputForm` strings, dates as ISO 8601 strings in UTC, a caller's `"ConversionFunction"` takes precedence, `jsonConvert` holds its argument, `writeRawJSONFile` round trip.
 - Payload JSON round trip.
 - Keep-alive touch, stale-file detection (current session excluded).
 - Submission with a stubbed `submitUsagePayload`: finished sessions submitted oldest first and deleted; fresh session kept; expired and unreadable files discarded; failure stops the batch; held lock skips; nonexistent directory.

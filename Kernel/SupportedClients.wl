@@ -171,6 +171,23 @@ $supportedMCPClients = <|
         "URL"             -> "https://github.com/features/copilot/cli",
         "InstallLocation" :> { $HomeDirectory, ".copilot", "mcp-config.json" }
     |>,
+    (* DeepSeek Harness (dsh) composes its plugin tree from Cordis patch layers. The
+       home-level layer ($DSH_HOME/cordis.patch.yml, default ~/.dsh/cordis.patch.yml)
+       applies to every profile, so each MCP server becomes one `insert` patch entry
+       loading the `@deepseek-ai/dsh-mcp-client` plugin. The file is a top-level YAML
+       array that commonly holds `!!js` tags our YAML parser cannot round-trip, so the
+       dedicated install overload edits it as text (see installMCPServer). There is no
+       project-scoped config file that dsh discovers on its own, so no ProjectPath. *)
+    "DeepSeekHarness" -> <|
+        "DisplayName"     -> "DeepSeek Harness",
+        "DefaultToolset"  -> "WolframLanguage",
+        "Aliases"         -> { "DeepSeek", "DSH" },
+        "ConfigFormat"    -> "YAML",
+        "ConfigKey"       -> { },
+        "ServerConverter" -> convertToDeepSeekHarnessFormat,
+        "URL"             -> "https://github.com/deepseek-ai/deepseek-harness",
+        "InstallLocation" :> deepSeekHarnessInstallLocation[ ]
+    |>,
     "Junie" -> <|
         "DisplayName"     -> "Junie",
         "DefaultToolset"  -> "WolframLanguage",
@@ -386,6 +403,31 @@ antigravityInstallLocation[ ] := If[
 antigravityInstallLocation // endDefinition;
 
 (* ::**************************************************************************************************************:: *)
+(* ::Subsection::Closed:: *)
+(*deepSeekHarnessInstallLocation*)
+(* Mirrors dsh's resolveDshHome/expandHomePath: a non-blank DSH_HOME environment
+   variable wins ("~", "~/..." and "~\..." expand to the user's home), otherwise the
+   home is ~/.dsh on every OS. *)
+deepSeekHarnessInstallLocation // beginDefinition;
+
+deepSeekHarnessInstallLocation[ ] :=
+    deepSeekHarnessInstallLocation @ Environment[ "DSH_HOME" ];
+
+deepSeekHarnessInstallLocation[ "~" ] :=
+    { $HomeDirectory, "cordis.patch.yml" };
+
+deepSeekHarnessInstallLocation[ home_String ] /; StringStartsQ[ home, "~/" | "~\\" ] :=
+    { $HomeDirectory, StringDrop[ home, 2 ], "cordis.patch.yml" };
+
+deepSeekHarnessInstallLocation[ home_String ] /; StringTrim @ home =!= "" :=
+    { ExpandFileName @ home, "cordis.patch.yml" };
+
+deepSeekHarnessInstallLocation[ _ ] :=
+    { $HomeDirectory, ".dsh", "cordis.patch.yml" };
+
+deepSeekHarnessInstallLocation // endDefinition;
+
+(* ::**************************************************************************************************************:: *)
 (* ::Section::Closed:: *)
 (*Converter Functions*)
 
@@ -560,6 +602,40 @@ convertToContinueFormat[ server_Association ] := Enclose[
 ];
 
 convertToContinueFormat // endDefinition;
+
+(* ::**************************************************************************************************************:: *)
+(* ::Subsection::Closed:: *)
+(*convertToDeepSeekHarnessFormat*)
+(* Produces the `config` block of a `@deepseek-ai/dsh-mcp-client` plugin row. The
+   `serverName` field is *not* set here: the install overload adds it (it knows the
+   configName; the converter does not). The client's default per-call timeout (60s)
+   is too short for a cold kernel or a slow Wolfram|Alpha query, so we match the 300s
+   timeout used for Goose. *)
+convertToDeepSeekHarnessFormat // beginDefinition;
+
+convertToDeepSeekHarnessFormat[ server_Association ] := Enclose[
+    Module[ { command, args, env, result },
+        command = ConfirmBy[ Lookup[ server, "command", Missing[ ] ], StringQ, "Command" ];
+        result  = <| "transport" -> "stdio", "command" -> command |>;
+
+        args = Lookup[ server, "args", { } ];
+        If[ ListQ @ args && Length @ args > 0,
+            result[ "args" ] = args
+        ];
+
+        env = Lookup[ server, "env", <| |> ];
+        If[ AssociationQ @ env && Length @ env > 0,
+            result[ "env" ] = env
+        ];
+
+        result[ "toolCallTimeoutMs" ] = 300000;
+
+        result
+    ],
+    throwInternalFailure
+];
+
+convertToDeepSeekHarnessFormat // endDefinition;
 
 (* ::**************************************************************************************************************:: *)
 (* ::Subsection::Closed:: *)

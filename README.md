@@ -126,6 +126,7 @@ AgentTools can be installed into the following MCP client applications:
 | [Continue](https://www.continue.dev/) (VS Code + JetBrains + CLI) | `"Continue"` | Yes |
 | [Copilot CLI](https://github.com/features/copilot/cli) | `"CopilotCLI"` | No |
 | [Cursor](https://www.cursor.com) | `"Cursor"` | No |
+| [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) | `"DeepSeekHarness"` | No |
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | `"GeminiCLI"` | No |
 | [Goose](https://block.github.io/goose/) | `"Goose"` | No |
 | [Google Antigravity](https://antigravity.google) | `"Antigravity"` | No |

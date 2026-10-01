@@ -28,20 +28,34 @@ InstallMCPServer // beginDefinition;
    This allows testing local changes without reinstalling the paclet.
 
    "SubmitUsageData" option:
-   - Automatic (default): Nothing is added to the configuration; the server tracks anonymous usage data only if its
+   - Automatic (default): Nothing is added to the configuration; the server tracks usage data only if its
      "EnableUsageData" property is True (as it is for the built-in servers)
    - True/False: Sets SUBMIT_USAGE_DATA in the server's environment, which takes precedence over the property
-   See docs/usage-data.md. *)
+   See docs/usage-data.md.
+
+   "WolframCommand" option:
+   - Automatic (default): The command is resolved from $InstallationDirectory for the current operating system
+   - command_String: Written verbatim as the "command" field of the client configuration, so a
+     standalone executable can be launched instead of the local Wolfram kernel
+
+   "CommandLineArguments" option:
+   - Automatic (default): The standard kernel arguments that start the server (-run PacletSymbol[...][], -noinit,
+     -noprompt); see $defaultCommandLineArguments in MCPServerObject.wl
+   - { args___String }: Written verbatim as the "args" field of the client configuration; an empty list is allowed,
+     but a single string is rejected since clients expect a JSON array
+   A non-False "DevelopmentMode" replaces the arguments with the development-mode ones and takes precedence. *)
 InstallMCPServer // Options = {
-    "ApplicationName"    -> Automatic,
-    "DevelopmentMode"    -> False,
-    "EnableLLMKit"       -> Automatic,
-    "EnableMCPApps"      -> True,
-    "MCPServerName"      -> Automatic,
-    "ProcessEnvironment" -> Automatic,
-    "SubmitUsageData"    -> Automatic,
-    "ToolOptions"        -> <| |>,
-    "VerifyLLMKit"       -> True
+    "ApplicationName"      -> Automatic,
+    "CommandLineArguments" -> Automatic,
+    "DevelopmentMode"      -> False,
+    "EnableLLMKit"         -> Automatic,
+    "EnableMCPApps"        -> True,
+    "MCPServerName"        -> Automatic,
+    "ProcessEnvironment"   -> Automatic,
+    "SubmitUsageData"      -> Automatic,
+    "ToolOptions"          -> <| |>,
+    "VerifyLLMKit"         -> True,
+    "WolframCommand"       -> Automatic
 };
 
 InstallMCPServer[ target_, opts: OptionsPattern[ ] ] :=
@@ -65,7 +79,9 @@ InstallMCPServer[ target_File? fileQ, server0_String? pacletQualifiedNameQ, opts
                     $enableLLMKit         = OptionValue[ "EnableLLMKit" ],
                     $installToolOptions   = validateToolOptions[ OptionValue[ "ToolOptions" ], server ],
                     $installMCPServerName = OptionValue[ "MCPServerName" ],
-                    $submitUsageData      = validateSubmitUsageData @ OptionValue[ "SubmitUsageData" ]
+                    $submitUsageData      = validateSubmitUsageData @ OptionValue[ "SubmitUsageData" ],
+                    $wolframCommand       = validateWolframCommand @ OptionValue[ "WolframCommand" ],
+                    $commandLineArguments = validateCommandLineArguments @ OptionValue[ "CommandLineArguments" ]
                 },
                 installMCPServer[
                     target,
@@ -87,7 +103,9 @@ InstallMCPServer[ target_File? fileQ, server0_, opts: OptionsPattern[ ] ] :=
                 $enableLLMKit         = OptionValue[ "EnableLLMKit" ],
                 $installToolOptions   = validateToolOptions[ OptionValue[ "ToolOptions" ], server ],
                 $installMCPServerName = OptionValue[ "MCPServerName" ],
-                $submitUsageData      = validateSubmitUsageData @ OptionValue[ "SubmitUsageData" ]
+                $submitUsageData      = validateSubmitUsageData @ OptionValue[ "SubmitUsageData" ],
+                $wolframCommand       = validateWolframCommand @ OptionValue[ "WolframCommand" ],
+                $commandLineArguments = validateCommandLineArguments @ OptionValue[ "CommandLineArguments" ]
             },
             installMCPServer[
                 target,
@@ -127,6 +145,22 @@ validateSubmitUsageData // beginDefinition;
 validateSubmitUsageData[ value: Automatic|True|False ] := value;
 validateSubmitUsageData[ other_ ] := throwFailure[ "InvalidSubmitUsageData", other ];
 validateSubmitUsageData // endDefinition;
+
+(* ::**************************************************************************************************************:: *)
+(* ::Subsection::Closed:: *)
+(*validateWolframCommand*)
+validateWolframCommand // beginDefinition;
+validateWolframCommand[ value: Automatic|_String ] := value;
+validateWolframCommand[ other_ ] := throwFailure[ "InvalidWolframCommand", other ];
+validateWolframCommand // endDefinition;
+
+(* ::**************************************************************************************************************:: *)
+(* ::Subsection::Closed:: *)
+(*validateCommandLineArguments*)
+validateCommandLineArguments // beginDefinition;
+validateCommandLineArguments[ value: Automatic|{ ___String } ] := value;
+validateCommandLineArguments[ other_ ] := throwFailure[ "InvalidCommandLineArguments", other ];
+validateCommandLineArguments // endDefinition;
 
 (* ::**************************************************************************************************************:: *)
 (* ::Subsection::Closed:: *)
@@ -289,6 +323,49 @@ installMCPServer[ target0_File, obj_MCPServerObject, env_Association, verifyLLMK
         ];
 
         ConfirmBy[ exportYAML[ target, existing ], fileQ, "Export" ];
+
+        clearStaleBuiltInRecords[ target, configName, obj ];
+        ConfirmBy[ recordMCPInstallation[ target, obj ], FileExistsQ, "Record" ];
+
+        installSuccess[ name, target, obj ]
+    ],
+    throwInternalFailure
+];
+
+(* DeepSeek Harness: the target is a Cordis patch layer (a top-level YAML array of patch
+   entries). Each server is one `insert` patch adding a `@deepseek-ai/dsh-mcp-client`
+   row. User patch files routinely carry `!!js` tags and `[]` roots that our YAML
+   parser cannot round-trip, so instead of parse-and-rewrite we own a marker-delimited
+   block per server and leave every other byte of the file untouched. *)
+installMCPServer[ target0_File, obj_MCPServerObject, env_Association, verifyLLMKit_, devMode_ ] /; $installClientName === "DeepSeekHarness" := Enclose[
+    Module[ { target, name, configName, json, data, server, convert, serverName, block, lines },
+
+        If[ verifyLLMKit, ConfirmMatch[ checkLLMKitRequirements @ obj, _String|None, "LLMKitCheck" ] ];
+        initializeTools @ obj;
+        Confirm[ validatePacletServerDefinitions @ obj, "ValidatePacletServerDefinitions" ];
+
+        target     = ConfirmBy[ ensureFilePath @ target0, fileQ, "Target" ];
+        name       = ConfirmBy[ obj[ "Name" ], StringQ, "Name" ];
+        configName = ConfirmBy[ resolveMCPServerName @ obj, StringQ, "ConfigName" ];
+        json       = ConfirmBy[ obj[ "JSONConfiguration" ], StringQ, "JSONConfiguration" ];
+        data       = ConfirmBy[ Developer`ReadRawJSONString @ json, AssociationQ, "JSONConfiguration" ];
+        server     = ConfirmBy[ addEnvironmentVariables[ data[ "mcpServers", name ], env ], AssociationQ, "Server" ];
+        If[ devMode =!= False,
+            server[ "args" ] = ConfirmMatch[ makeDevelopmentArgs @ devMode, { __String }, "DevelopmentArgs" ]
+        ];
+
+        convert    = serverConverter @ $installClientName;
+        server     = ConfirmBy[ convert @ server, AssociationQ, "DeepSeekHarnessServer" ];
+        serverName = ConfirmBy[ toDSHServerName @ configName, StringQ, "ServerName" ];
+        server     = Insert[ server, "serverName" -> serverName, 2 ];
+
+        block = ConfirmBy[ dshPatchBlock[ configName, serverName, server ], StringQ, "Block" ];
+        lines = ConfirmMatch[ readDSHPatchLines @ target, { ___String }, "Lines" ];
+        lines = First @ ConfirmMatch[ removeDSHPatchBlock[ lines, configName, target ], { { ___String }, _ }, "Remove" ];
+        lines = ConfirmMatch[ prepareDSHPatchLines[ lines, target ], { ___String }, "Prepare" ];
+        lines = Join[ lines, If[ lines === { }, { }, { "" } ], StringSplit[ block, "\n", All ] ];
+
+        ConfirmBy[ writeDSHPatchLines[ target, lines ], fileQ, "Export" ];
 
         clearStaleBuiltInRecords[ target, configName, obj ];
         ConfirmBy[ recordMCPInstallation[ target, obj ], FileExistsQ, "Record" ];
@@ -653,6 +730,7 @@ guessClientName[ file_? fileQ ] := Enclose[
             { __, ".junie", "mcp", "mcp.json" }, Throw[ "Junie" ],
             { __, ".kimi", "mcp.json" }, Throw[ "KimiCode" ],
             { __, ".qwen", "settings.json" }, Throw[ "QwenCode" ],
+            { __, "cordis.patch.yml" }, Throw[ "DeepSeekHarness" ],
             { __, ".continue", "config.yaml" }, Throw[ "Continue" ],
             { __, ".continue", "mcpservers", _ }, Throw[ "Continue" ],
             { __, ".lmstudio", "mcp.json" }, Throw[ "LMStudio" ],
@@ -1184,6 +1262,187 @@ readExistingContinueConfig[ file_ ] := Enclose[
 readExistingContinueConfig // endDefinition;
 
 (* ::**************************************************************************************************************:: *)
+(* ::Subsection::Closed:: *)
+(*DeepSeek Harness Patch Files*)
+(* dsh patch layers are top-level YAML arrays of Cordis patch entries that users edit by
+   hand, typically with `!!js` expressions. We never parse and rewrite them: each server
+   lives in its own marker-delimited block (one `insert` patch entry), and install and
+   uninstall only add or remove that block. *)
+$dshPluginName = "@deepseek-ai/dsh-mcp-client";
+
+(* ::**************************************************************************************************************:: *)
+(* ::Subsubsection::Closed:: *)
+(*toDSHServerName*)
+(* dsh-mcp-client requires serverName to match [A-Za-z0-9_-]{1,32}; it namespaces the
+   model-facing tool names (mcp__<serverName>__<tool>). *)
+toDSHServerName // beginDefinition;
+
+toDSHServerName[ name_String ] :=
+    Replace[
+        StringTake[ StringReplace[ name, RegularExpression[ "[^A-Za-z0-9_-]" ] -> "_" ], UpTo[ 32 ] ],
+        "" -> "Wolfram"
+    ];
+
+toDSHServerName // endDefinition;
+
+(* ::**************************************************************************************************************:: *)
+(* ::Subsubsection::Closed:: *)
+(*dshBlockMarkers*)
+dshBlockMarkers // beginDefinition;
+
+dshBlockMarkers[ configName_String ] := {
+    "# >>> AgentTools MCP server \"" <> configName <> "\" (managed by InstallMCPServer; do not edit) >>>",
+    "# <<< AgentTools MCP server \"" <> configName <> "\" <<<"
+};
+
+dshBlockMarkers // endDefinition;
+
+(* ::**************************************************************************************************************:: *)
+(* ::Subsubsection::Closed:: *)
+(*dshPatchBlock*)
+dshPatchBlock // beginDefinition;
+
+dshPatchBlock[ configName_String, serverName_String, config_Association ] := Enclose[
+    Module[ { patches, yaml, markers },
+        patches = {
+            <|
+                "insert" -> {
+                    <|
+                        "id"     -> "agenttools-" <> serverName,
+                        "name"   -> $dshPluginName,
+                        "config" -> config
+                    |>
+                }
+            |>
+        };
+        yaml = ConfirmBy[ exportYAMLString @ patches, StringQ, "YAML" ];
+        ConfirmAssert[ importYAMLString @ yaml === patches, "RoundTrip" ];
+        markers = dshBlockMarkers @ configName;
+        StringRiffle[ { First @ markers, StringTrim[ yaml, "\n".. ], Last @ markers }, "\n" ]
+    ],
+    throwInternalFailure
+];
+
+dshPatchBlock // endDefinition;
+
+(* ::**************************************************************************************************************:: *)
+(* ::Subsubsection::Closed:: *)
+(*readDSHPatchLines*)
+(* Lines are kept verbatim (including any trailing "\r") so rewriting the file does not
+   touch content outside our blocks. *)
+readDSHPatchLines // beginDefinition;
+
+readDSHPatchLines[ file_ ] := Enclose[
+    Catch @ Module[ { path, bytes, lines },
+        path = ConfirmBy[ ExpandFileName @ file, StringQ, "Path" ];
+        If[ ! FileExistsQ @ path, Throw @ { } ];
+        bytes = ReadByteArray @ path;
+        If[ ! ByteArrayQ @ bytes, Throw @ { } ];
+        lines = StringSplit[ ConfirmBy[ ByteArrayToString[ bytes, "UTF-8" ], StringQ, "String" ], "\n", All ];
+        If[ lines =!= { } && Last @ lines === "", Most @ lines, lines ]
+    ],
+    throwInternalFailure
+];
+
+readDSHPatchLines // endDefinition;
+
+(* ::**************************************************************************************************************:: *)
+(* ::Subsubsection::Closed:: *)
+(*removeDSHPatchBlock*)
+(* Returns { remainingLines, removedQ }. A begin marker without a matching end marker
+   means the file was hand-edited in a way we cannot safely repair, so we refuse. *)
+removeDSHPatchBlock // beginDefinition;
+
+removeDSHPatchBlock[ lines0: { ___String }, configName_String, file_ ] :=
+    Module[ { begin, end, lines, removed, i, j },
+        { begin, end } = dshBlockMarkers @ configName;
+        lines   = lines0;
+        removed = False;
+        While[ IntegerQ[ i = FirstPosition[ StringTrim @ lines, begin, { None }, { 1 } ][[ 1 ]] ],
+            j = FirstPosition[ StringTrim @ Drop[ lines, i ], end, { None }, { 1 } ][[ 1 ]];
+            If[ ! IntegerQ @ j, throwFailure[ "InvalidMCPConfiguration", file ] ];
+            lines = Drop[ lines, { i, i + j } ];
+            (* Drop the blank separator line that install puts before each block *)
+            If[ i > 1 && StringTrim @ lines[[ i - 1 ]] === "", lines = Drop[ lines, { i - 1 } ] ];
+            removed = True
+        ];
+        { lines, removed }
+    ];
+
+removeDSHPatchBlock // endDefinition;
+
+(* ::**************************************************************************************************************:: *)
+(* ::Subsubsection::Closed:: *)
+(*dshContentLines*)
+(* Lines that carry YAML content: not blank, not a comment, not a document marker. *)
+dshContentLines // beginDefinition;
+dshContentLines[ lines: { ___String } ] := Select[ lines, ! StringMatchQ[ StringTrim @ #, "" | "---" | ("#" ~~ ___) ] & ];
+dshContentLines // endDefinition;
+
+(* ::**************************************************************************************************************:: *)
+(* ::Subsubsection::Closed:: *)
+(*prepareDSHPatchLines*)
+(* Makes the remaining lines safe to append a block-style sequence item to. An empty
+   flow sequence `[]` (the natural "no patches" file) is dropped since our block replaces
+   it. Any other root that is not a block sequence (a flow list, a mapping, a scalar)
+   cannot be extended by appending text, so we refuse rather than corrupt it. *)
+prepareDSHPatchLines // beginDefinition;
+
+prepareDSHPatchLines[ lines0: { ___String }, file_ ] :=
+    Module[ { lines, content },
+        lines   = lines0;
+        content = dshContentLines @ lines;
+        Which[
+            content === { },
+                Null,
+            AllTrue[ content, dshEmptyFlowSequenceQ ],
+                lines = DeleteCases[ lines, _? dshEmptyFlowSequenceQ ],
+            StringMatchQ[ First @ content, "-" ~~ ("" | (WhitespaceCharacter ~~ ___)) ],
+                Null,
+            True,
+                throwFailure[ "InvalidMCPConfiguration", file ]
+        ];
+        dropTrailingBlankLines @ lines
+    ];
+
+prepareDSHPatchLines // endDefinition;
+
+(* ::**************************************************************************************************************:: *)
+(* ::Subsubsection::Closed:: *)
+(*dshEmptyFlowSequenceQ*)
+dshEmptyFlowSequenceQ // beginDefinition;
+dshEmptyFlowSequenceQ[ line_String ] := StringMatchQ[ line, RegularExpression[ "\\s*\\[\\s*\\]\\s*(#.*)?\\r?" ] ];
+dshEmptyFlowSequenceQ // endDefinition;
+
+(* ::**************************************************************************************************************:: *)
+(* ::Subsubsection::Closed:: *)
+(*dropTrailingBlankLines*)
+dropTrailingBlankLines // beginDefinition;
+dropTrailingBlankLines[ { most___String, last_String } ] /; StringTrim @ last === "" := dropTrailingBlankLines @ { most };
+dropTrailingBlankLines[ lines: { ___String } ] := lines;
+dropTrailingBlankLines // endDefinition;
+
+(* ::**************************************************************************************************************:: *)
+(* ::Subsubsection::Closed:: *)
+(*writeDSHPatchLines*)
+writeDSHPatchLines // beginDefinition;
+
+writeDSHPatchLines[ file_, lines: { ___String } ] := Enclose[
+    Module[ { path, stream },
+        path   = ConfirmBy[ ExpandFileName @ ensureFilePath @ file, StringQ, "Path" ];
+        stream = ConfirmMatch[ OpenWrite[ path, CharacterEncoding -> "UTF-8" ], _OutputStream, "Stream" ];
+        WithCleanup[
+            WriteString[ stream, StringRiffle[ lines, "\n" ] <> "\n" ],
+            Close @ stream
+        ];
+        File @ path
+    ],
+    throwInternalFailure
+];
+
+writeDSHPatchLines // endDefinition;
+
+(* ::**************************************************************************************************************:: *)
 (* ::Section::Closed:: *)
 (*UninstallMCPServer*)
 UninstallMCPServer // beginDefinition;
@@ -1344,6 +1603,33 @@ uninstallMCPServer[ target0_File, obj_MCPServerObject ] /; $installClientName ==
         existing[ "mcpServers" ] = filtered;
 
         ConfirmBy[ exportYAML[ target, existing ], fileQ, "Export" ];
+        ConfirmMatch[ clearRecordedInstallation[ target, obj ], { ___Association }, "Clear" ];
+
+        uninstallSuccess[ name, target, obj ]
+    ],
+    throwInternalFailure
+];
+
+(* DeepSeek Harness: remove our marker-delimited block. dsh rejects a patch file that is
+   empty or comment-only (it must parse as a YAML array), so if nothing else is left we
+   leave an explicit empty sequence behind. *)
+uninstallMCPServer[ target0_File, obj_MCPServerObject ] /; $installClientName === "DeepSeekHarness" := Enclose[
+    Catch @ Module[ { target, name, configName, lines, removed },
+
+        target = ConfirmBy[ ensureFilePath @ target0, fileQ, "Target" ];
+        If[ ! FileExistsQ @ target, Throw @ Missing[ "NotInstalled", target ] ];
+
+        name       = ConfirmBy[ obj[ "Name" ], StringQ, "Name" ];
+        configName = ConfirmBy[ resolveMCPServerName @ obj, StringQ, "ConfigName" ];
+
+        lines = ConfirmMatch[ readDSHPatchLines @ target, { ___String }, "Lines" ];
+        { lines, removed } = ConfirmMatch[ removeDSHPatchBlock[ lines, configName, target ], { { ___String }, _ }, "Remove" ];
+        If[ ! TrueQ @ removed, Throw @ Missing[ "NotInstalled", target ] ];
+
+        lines = dropTrailingBlankLines @ lines;
+        If[ dshContentLines @ lines === { }, lines = Append[ lines, "[]" ] ];
+
+        ConfirmBy[ writeDSHPatchLines[ target, lines ], fileQ, "Export" ];
         ConfirmMatch[ clearRecordedInstallation[ target, obj ], { ___Association }, "Clear" ];
 
         uninstallSuccess[ name, target, obj ]

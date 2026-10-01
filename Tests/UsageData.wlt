@@ -45,11 +45,33 @@ submitUsagePayload  = Wolfram`AgentTools`Server`UsageData`Private`submitUsagePay
 getGlobalUsageDataSetting = Wolfram`AgentTools`Common`getGlobalUsageDataSetting;
 setGlobalUsageDataSetting = Wolfram`AgentTools`Common`setGlobalUsageDataSetting;
 
-usageStatsFile[ ] := Wolfram`AgentTools`Server`UsageData`Private`$usageStatsFile;
-usageDataPath[ ]  := Wolfram`AgentTools`Server`UsageData`Private`$usageDataPath;
-sessionData[ ]    := Developer`ReadWXFFile @ usageStatsFile[ ];
-usageEvents[ ]    := Internal`BagPart[ Wolfram`AgentTools`Server`$usageEvents, All ];
-globalSettingsFile[ ] := Wolfram`AgentTools`Common`$globalSettingsFile;
+usageStatsFile[ ]      := Wolfram`AgentTools`Server`UsageData`Private`$usageStatsFile;
+usageDataPath[ ]       := Wolfram`AgentTools`Server`UsageData`Private`$usageDataPath;
+productIdentityInfo[ ] := Wolfram`AgentTools`Server`UsageData`Private`$productIdentityInfo;
+sessionData[ ]         := Developer`ReadWXFFile @ usageStatsFile[ ];
+usageEvents[ ]         := Internal`BagPart[ Wolfram`AgentTools`Server`$usageEvents, All ];
+globalSettingsFile[ ]  := Wolfram`AgentTools`Common`$globalSettingsFile;
+
+(* The product identity fields of the payload (see docs/usage-data.md) *)
+$productIdentityKeys = {
+    "ActivationKey", "CloudUserUUID", "Language", "LicenseID", "LicenseProcesses", "LicenseSubprocesses",
+    "MachineID", "MaxLicenseProcesses", "MaxLicenseSubprocesses", "ProductIDName", "ReleaseID", "SystemID"
+};
+
+(* Every field of a session file (the product identity information is spliced in at the top level) *)
+$payloadKeys = Join[
+    { "ClientInformation", "Events", "LastUpdated", "MCPSessionID", "PacletVersion", "ServerName" },
+    { "StandaloneMCPServer", "StandaloneMCPServerInformation" },
+    $productIdentityKeys
+];
+
+(* What the JSON holds for a top-level payload value: JSON-representable values as they are, anything else
+   (Infinity, None, ...) as its InputForm string (see jsonConvert in Kernel/Files.wl) *)
+jsonValue[ value: _Integer|_Real|_String|Null|True|False|_List|_Association ] := value;
+jsonValue[ value_ ] := ToString[ value, InputForm ];
+
+(* usageDataJSON gives the UTF-8 bytes of the JSON that is submitted *)
+readUsageJSON[ bytes_ByteArray ] := Developer`ReadRawJSONString @ ByteArrayToString[ bytes, "UTF-8" ];
 
 $testTool = LLMTool[ "PrimeFinder", { "n" -> "Integer" }, Prime[ #n ] & ];
 
@@ -119,7 +141,7 @@ VerificationTest[
     Wolfram`AgentTools`Server`UsageData`Private`$usageDataEndpoint,
     "https://www.wolframcloud.com/obj/wolframai-content/api/1.0/usage",
     SameTest -> SameQ,
-    TestID   -> "UsageData-Endpoint@@Tests/UsageData.wlt:118,1-123,2"
+    TestID   -> "UsageData-Endpoint@@Tests/UsageData.wlt:140,1-145,2"
 ]
 
 (* Outside a server session nothing is tracked *)
@@ -131,7 +153,7 @@ VerificationTest[
     },
     { False, None, Null },
     SameTest -> SameQ,
-    TestID   -> "UsageData-DisabledOutsideServer@@Tests/UsageData.wlt:126,1-135,2"
+    TestID   -> "UsageData-DisabledOutsideServer@@Tests/UsageData.wlt:148,1-157,2"
 ]
 
 (* ::**************************************************************************************************************:: *)
@@ -145,7 +167,7 @@ VerificationTest[
     withTemporaryRoot @ { getGlobalUsageDataSetting[ ], FileExistsQ @ globalSettingsFile[ ] },
     { True, False },
     SameTest -> SameQ,
-    TestID   -> "GlobalUsageDataSetting-Default@@Tests/UsageData.wlt:144,1-149,2"
+    TestID   -> "GlobalUsageDataSetting-Default@@Tests/UsageData.wlt:166,1-171,2"
 ]
 
 (* Opting out and back in *)
@@ -160,7 +182,7 @@ VerificationTest[
     },
     { False, False, <| "SubmitUsageData" -> False |>, True, True, <| "SubmitUsageData" -> True |> },
     SameTest -> SameQ,
-    TestID   -> "GlobalUsageDataSetting-SetAndGet@@Tests/UsageData.wlt:152,1-164,2"
+    TestID   -> "GlobalUsageDataSetting-SetAndGet@@Tests/UsageData.wlt:174,1-186,2"
 ]
 
 (* Other global settings in the file are left alone *)
@@ -172,7 +194,7 @@ VerificationTest[
     ),
     <| "Other" -> 1, "SubmitUsageData" -> False |>,
     SameTest -> SameQ,
-    TestID   -> "GlobalUsageDataSetting-PreservesOtherSettings@@Tests/UsageData.wlt:167,1-176,2"
+    TestID   -> "GlobalUsageDataSetting-PreservesOtherSettings@@Tests/UsageData.wlt:189,1-198,2"
 ]
 
 (* Only an explicit False opts out *)
@@ -183,7 +205,7 @@ VerificationTest[
     ),
     True,
     SameTest -> SameQ,
-    TestID   -> "GlobalUsageDataSetting-NonBooleanIgnored@@Tests/UsageData.wlt:179,1-187,2"
+    TestID   -> "GlobalUsageDataSetting-NonBooleanIgnored@@Tests/UsageData.wlt:201,1-209,2"
 ]
 
 (* The setting can only be set to a boolean *)
@@ -192,7 +214,7 @@ VerificationTest[
     Failure[ "AgentTools::Internal", _ ],
     { General::AgentToolsInternal },
     SameTest -> MatchQ,
-    TestID   -> "GlobalUsageDataSetting-InvalidValue@@Tests/UsageData.wlt:190,1-196,2"
+    TestID   -> "GlobalUsageDataSetting-InvalidValue@@Tests/UsageData.wlt:212,1-218,2"
 ]
 
 (* ::**************************************************************************************************************:: *)
@@ -202,7 +224,7 @@ VerificationTest[
     booleanString /@ { "true", "TRUE", " yes ", "on", "1", "false", "No", "off", "0", "", "maybe", 1, None },
     { True, True, True, True, True, False, False, False, False, None, None, None, None },
     SameTest -> SameQ,
-    TestID   -> "UsageData-BooleanString@@Tests/UsageData.wlt:201,1-206,2"
+    TestID   -> "UsageData-BooleanString@@Tests/UsageData.wlt:223,1-228,2"
 ]
 
 $customServer = CreateMCPServer[
@@ -222,7 +244,7 @@ VerificationTest[
     ],
     { True, True, False, False },
     SameTest -> SameQ,
-    TestID   -> "UsageDataEnabledQ-Property@@Tests/UsageData.wlt:214,1-226,2"
+    TestID   -> "UsageDataEnabledQ-Property@@Tests/UsageData.wlt:236,1-248,2"
 ]
 
 (* An explicit boolean in SUBMIT_USAGE_DATA takes precedence over the property in both directions *)
@@ -232,7 +254,7 @@ VerificationTest[
     ],
     { False, False },
     SameTest -> SameQ,
-    TestID   -> "UsageDataEnabledQ-EnvironmentFalse@@Tests/UsageData.wlt:229,1-236,2"
+    TestID   -> "UsageDataEnabledQ-EnvironmentFalse@@Tests/UsageData.wlt:251,1-258,2"
 ]
 
 VerificationTest[
@@ -241,7 +263,7 @@ VerificationTest[
     ],
     { True, True },
     SameTest -> SameQ,
-    TestID   -> "UsageDataEnabledQ-EnvironmentTrue@@Tests/UsageData.wlt:238,1-245,2"
+    TestID   -> "UsageDataEnabledQ-EnvironmentTrue@@Tests/UsageData.wlt:260,1-267,2"
 ]
 
 (* A value that is not a boolean is ignored *)
@@ -251,7 +273,7 @@ VerificationTest[
     ],
     { True, False },
     SameTest -> SameQ,
-    TestID   -> "UsageDataEnabledQ-EnvironmentNonBoolean@@Tests/UsageData.wlt:248,1-255,2"
+    TestID   -> "UsageDataEnabledQ-EnvironmentNonBoolean@@Tests/UsageData.wlt:270,1-277,2"
 ]
 
 (* A global opt-out (the preferences panel's checkbox) turns tracking off for the built-in servers... *)
@@ -268,7 +290,7 @@ VerificationTest[
     ),
     { False, False, False },
     SameTest -> SameQ,
-    TestID   -> "UsageDataEnabledQ-GlobalOptOut@@Tests/UsageData.wlt:258,1-272,2"
+    TestID   -> "UsageDataEnabledQ-GlobalOptOut@@Tests/UsageData.wlt:280,1-294,2"
 ]
 
 (* ...but an explicit boolean in SUBMIT_USAGE_DATA still takes precedence over it *)
@@ -286,7 +308,7 @@ VerificationTest[
     ),
     { { True, True }, { False, False } },
     SameTest -> SameQ,
-    TestID   -> "UsageDataEnabledQ-GlobalOptOutEnvironmentPrecedence@@Tests/UsageData.wlt:275,1-290,2"
+    TestID   -> "UsageDataEnabledQ-GlobalOptOutEnvironmentPrecedence@@Tests/UsageData.wlt:297,1-312,2"
 ]
 
 (* Opting back in restores the default *)
@@ -300,7 +322,7 @@ VerificationTest[
     ),
     { True, False },
     SameTest -> SameQ,
-    TestID   -> "UsageDataEnabledQ-GlobalOptIn@@Tests/UsageData.wlt:293,1-304,2"
+    TestID   -> "UsageDataEnabledQ-GlobalOptIn@@Tests/UsageData.wlt:315,1-326,2"
 ]
 
 (* ::**************************************************************************************************************:: *)
@@ -341,7 +363,7 @@ VerificationTest[
     ],
     { True, True, True, TaskObject, TaskObject, "Wolfram", False },
     SameTest -> SameQ,
-    TestID   -> "InitializeUsageData-Enabled@@Tests/UsageData.wlt:311,1-345,2"
+    TestID   -> "InitializeUsageData-Enabled@@Tests/UsageData.wlt:333,1-367,2"
 ]
 
 (* An untracked server still gets a session ID, but nothing else happens *)
@@ -365,7 +387,7 @@ VerificationTest[
     ],
     { False, False, True, None, None },
     SameTest -> SameQ,
-    TestID   -> "InitializeUsageData-Disabled@@Tests/UsageData.wlt:348,1-369,2"
+    TestID   -> "InitializeUsageData-Disabled@@Tests/UsageData.wlt:370,1-391,2"
 ]
 
 (* Opting out via the environment wins over the built-in server's property *)
@@ -383,7 +405,7 @@ VerificationTest[
     ],
     { False, False },
     SameTest -> SameQ,
-    TestID   -> "InitializeUsageData-OptedOut@@Tests/UsageData.wlt:372,1-387,2"
+    TestID   -> "InitializeUsageData-OptedOut@@Tests/UsageData.wlt:394,1-409,2"
 ]
 
 (* A global opt-out (the preferences panel's checkbox) is read when the server starts *)
@@ -408,7 +430,7 @@ VerificationTest[
     ],
     { False, False, True, None, None },
     SameTest -> SameQ,
-    TestID   -> "InitializeUsageData-GlobalOptOut@@Tests/UsageData.wlt:390,1-412,2"
+    TestID   -> "InitializeUsageData-GlobalOptOut@@Tests/UsageData.wlt:412,1-434,2"
 ]
 
 (* Initialization never breaks server startup, even with a bogus server *)
@@ -424,7 +446,7 @@ VerificationTest[
     ],
     False,
     SameTest -> SameQ,
-    TestID   -> "InitializeUsageData-InvalidServer@@Tests/UsageData.wlt:415,1-428,2"
+    TestID   -> "InitializeUsageData-InvalidServer@@Tests/UsageData.wlt:437,1-450,2"
 ]
 
 (* ::**************************************************************************************************************:: *)
@@ -443,20 +465,21 @@ VerificationTest[
                 data[ "ClientInformation" ] === $initMessage[ "params" ],
                 data[ "Events" ],
                 data[ "ServerName" ],
+                data[ "StandaloneMCPServer" ],
+                data[ "StandaloneMCPServerInformation" ],
                 data[ "PacletVersion" ] === Wolfram`AgentTools`Common`$pacletVersion,
-                data[ "WolframVersion" ] === $Version,
-                data[ "SystemID" ] === $SystemID,
+                KeyTake[ data, $productIdentityKeys ] === productIdentityInfo[ ],
                 Abs[ data[ "LastUpdated" ] - AbsoluteTime[ TimeZone -> 0 ] ] < 60,
                 Sort @ Keys @ data
             }
         ]
     ],
     {
-        True, True, { }, "TestServer", True, True, True, True,
-        { "ClientInformation", "Events", "LastUpdated", "MCPSessionID", "PacletVersion", "ServerName", "SystemID", "WolframVersion" }
+        True, True, { }, "TestServer", False, <| |>, True, True, True,
+        Sort @ $payloadKeys
     },
     SameTest -> SameQ,
-    TestID   -> "RecordUsageData-Initialize@@Tests/UsageData.wlt:437,1-460,2"
+    TestID   -> "RecordUsageData-Initialize@@Tests/UsageData.wlt:459,1-483,2"
 ]
 
 (* The session file is named after the session ID and lives in $rootPath/UsageData *)
@@ -471,7 +494,7 @@ VerificationTest[
     ],
     { True, True, True },
     SameTest -> SameQ,
-    TestID   -> "RecordUsageData-SessionFileLocation@@Tests/UsageData.wlt:463,1-475,2"
+    TestID   -> "RecordUsageData-SessionFileLocation@@Tests/UsageData.wlt:486,1-498,2"
 ]
 
 (* Malformed initialize parameters are stored as Null rather than failing *)
@@ -482,7 +505,7 @@ VerificationTest[
     ],
     Null,
     SameTest -> SameQ,
-    TestID   -> "RecordUsageData-InitializeInvalidParams@@Tests/UsageData.wlt:478,1-486,2"
+    TestID   -> "RecordUsageData-InitializeInvalidParams@@Tests/UsageData.wlt:501,1-509,2"
 ]
 
 (* ::**************************************************************************************************************:: *)
@@ -495,7 +518,7 @@ VerificationTest[
     ],
     { KeyValuePattern @ { "Type" -> "ToolCall", "Name" -> "PrimeFinder", "Success" -> True, "Timestamp" -> _Real } },
     SameTest -> MatchQ,
-    TestID   -> "RecordUsageData-ToolCallSuccess@@Tests/UsageData.wlt:491,1-499,2"
+    TestID   -> "RecordUsageData-ToolCallSuccess@@Tests/UsageData.wlt:514,1-522,2"
 ]
 
 VerificationTest[
@@ -507,7 +530,7 @@ VerificationTest[
     ],
     { { "Name", "Success", "Timestamp", "Type" }, True },
     SameTest -> SameQ,
-    TestID   -> "RecordUsageData-ToolCallEventShape@@Tests/UsageData.wlt:501,1-511,2"
+    TestID   -> "RecordUsageData-ToolCallEventShape@@Tests/UsageData.wlt:524,1-534,2"
 ]
 
 (* Neither arguments nor results are recorded *)
@@ -520,7 +543,7 @@ VerificationTest[
     ],
     { True, True, True, True },
     SameTest -> SameQ,
-    TestID   -> "RecordUsageData-ToolCallNoParameters@@Tests/UsageData.wlt:514,1-524,2"
+    TestID   -> "RecordUsageData-ToolCallNoParameters@@Tests/UsageData.wlt:537,1-547,2"
 ]
 
 (* Failures: tool errors, unknown tools (name not recorded), internal failures, and JSON-RPC errors *)
@@ -535,7 +558,7 @@ VerificationTest[
     ],
     { { "PrimeFinder", False }, { Null, False }, { "PrimeFinder", False }, { "PrimeFinder", False }, { Null, False } },
     SameTest -> SameQ,
-    TestID   -> "RecordUsageData-ToolCallFailures@@Tests/UsageData.wlt:527,1-539,2"
+    TestID   -> "RecordUsageData-ToolCallFailures@@Tests/UsageData.wlt:550,1-562,2"
 ]
 
 (* Events accumulate in order, and the file always holds all of them *)
@@ -549,7 +572,7 @@ VerificationTest[
     ],
     { { True, False, True }, 3, True },
     SameTest -> SameQ,
-    TestID   -> "RecordUsageData-EventsAccumulate@@Tests/UsageData.wlt:542,1-553,2"
+    TestID   -> "RecordUsageData-EventsAccumulate@@Tests/UsageData.wlt:565,1-576,2"
 ]
 
 (* ::**************************************************************************************************************:: *)
@@ -565,7 +588,7 @@ VerificationTest[
     ],
     { { { "PromptGet", "Greet", True }, { "PromptGet", Null, False } }, True, True },
     SameTest -> SameQ,
-    TestID   -> "RecordUsageData-Prompts@@Tests/UsageData.wlt:558,1-569,2"
+    TestID   -> "RecordUsageData-Prompts@@Tests/UsageData.wlt:581,1-592,2"
 ]
 
 (* ::**************************************************************************************************************:: *)
@@ -582,7 +605,7 @@ VerificationTest[
     ],
     { False, 0 },
     SameTest -> SameQ,
-    TestID   -> "RecordUsageData-OtherMethodsIgnored@@Tests/UsageData.wlt:574,1-586,2"
+    TestID   -> "RecordUsageData-OtherMethodsIgnored@@Tests/UsageData.wlt:597,1-609,2"
 ]
 
 VerificationTest[
@@ -600,7 +623,7 @@ VerificationTest[
     ],
     { Null, Null, False, False, Null, 0 },
     SameTest -> SameQ,
-    TestID   -> "RecordUsageData-DisabledRecordsNothing@@Tests/UsageData.wlt:588,1-604,2"
+    TestID   -> "RecordUsageData-DisabledRecordsNothing@@Tests/UsageData.wlt:611,1-627,2"
 ]
 
 (* The number of events per session is capped *)
@@ -613,7 +636,7 @@ VerificationTest[
     ],
     { 3, 3 },
     SameTest -> SameQ,
-    TestID   -> "RecordUsageData-EventLimit@@Tests/UsageData.wlt:607,1-617,2"
+    TestID   -> "RecordUsageData-EventLimit@@Tests/UsageData.wlt:630,1-640,2"
 ]
 
 (* A failure while recording (here: the session file cannot be written) is swallowed and never propagates to the
@@ -626,7 +649,190 @@ VerificationTest[
     ],
     { _Failure, 1 },
     SameTest -> MatchQ,
-    TestID   -> "RecordUsageData-FailuresAreIsolated@@Tests/UsageData.wlt:621,1-630,2"
+    TestID   -> "RecordUsageData-FailuresAreIsolated@@Tests/UsageData.wlt:644,1-653,2"
+]
+
+(* ::**************************************************************************************************************:: *)
+(* ::Section::Closed:: *)
+(*Product Identity Information*)
+(* The payload carries the same product identity information that the paclet manager sends with every request to the
+   paclet server (PacletManager`Package`$productIdentityHeaders), which identifies the installation. *)
+VerificationTest[
+    Keys @ productIdentityInfo[ ],
+    $productIdentityKeys,
+    SameTest -> SameQ,
+    TestID   -> "ProductIdentityInfo-Keys@@Tests/UsageData.wlt:660,1-665,2"
+]
+
+(* Each value is the kernel's own, as it is; values that JSON cannot represent are converted when the payload is
+   written as JSON (see below) *)
+VerificationTest[
+    With[ { info = productIdentityInfo[ ] },
+        {
+            info[ "ActivationKey"          ] === $ActivationKey,
+            info[ "CloudUserUUID"          ] === $CloudUserUUID,
+            info[ "Language"               ] === $Language,
+            info[ "LicenseID"              ] === $LicenseID,
+            info[ "LicenseProcesses"       ] === $LicenseProcesses,
+            info[ "LicenseSubprocesses"    ] === $LicenseSubprocesses,
+            info[ "MachineID"              ] === $MachineID,
+            info[ "MaxLicenseProcesses"    ] === $MaxLicenseProcesses,
+            info[ "MaxLicenseSubprocesses" ] === $MaxLicenseSubprocesses,
+            info[ "ProductIDName"          ] === SystemInformation[ "Kernel", "ProductIDName" ],
+            info[ "ReleaseID"              ] === SystemInformation[ "Kernel", "ReleaseID" ],
+            info[ "SystemID"               ] === $SystemID,
+            StringQ @ info[ "MachineID" ],
+            StringQ @ info[ "SystemID" ]
+        }
+    ],
+    { True, True, True, True, True, True, True, True, True, True, True, True, True, True },
+    SameTest -> SameQ,
+    TestID   -> "ProductIdentityInfo-Values@@Tests/UsageData.wlt:669,1-691,2"
+]
+
+(* Values that JSON cannot represent, e.g. None when the kernel is not connected to the cloud, are kept as they are in
+   the payload (and so in the session file) and become their InputForm strings in the JSON. (Block stands in for the
+   connection state here; $MaxLicenseProcesses, which is Infinity for an unlimited license, is a special symbol that
+   cannot be Blocked.) *)
+VerificationTest[
+    {
+        Block[ { $CloudUserUUID = None }, productIdentityInfo[ ][ "CloudUserUUID" ] ],
+        Block[ { $CloudUserUUID = "11111111-2222-3333-4444-555555555555" }, productIdentityInfo[ ][ "CloudUserUUID" ] ],
+        Block[ { $CloudUserUUID = Infinity }, productIdentityInfo[ ][ "CloudUserUUID" ] ],
+        Block[ { $CloudUserUUID = $Failed }, productIdentityInfo[ ][ "CloudUserUUID" ] ]
+    },
+    { None, "11111111-2222-3333-4444-555555555555", Infinity, $Failed },
+    SameTest -> SameQ,
+    TestID   -> "ProductIdentityInfo-NonJSONValuesKept@@Tests/UsageData.wlt:697,1-707,2"
+]
+
+VerificationTest[
+    {
+        Block[ { $CloudUserUUID = None }, readUsageJSON[ usageDataJSON @ productIdentityInfo[ ] ][ "CloudUserUUID" ] ],
+        Block[ { $CloudUserUUID = "11111111-2222-3333-4444-555555555555" }, readUsageJSON[ usageDataJSON @ productIdentityInfo[ ] ][ "CloudUserUUID" ] ],
+        Block[ { $CloudUserUUID = Infinity }, readUsageJSON[ usageDataJSON @ productIdentityInfo[ ] ][ "CloudUserUUID" ] ],
+        Block[ { $CloudUserUUID = $Failed }, readUsageJSON[ usageDataJSON @ productIdentityInfo[ ] ][ "CloudUserUUID" ] ]
+    },
+    { "None", "11111111-2222-3333-4444-555555555555", "Infinity", "$Failed" },
+    SameTest -> SameQ,
+    TestID   -> "ProductIdentityInfo-NonJSONValuesAsStrings@@Tests/UsageData.wlt:709,1-719,2"
+]
+
+(* The payload can always be serialized, as UTF-8 bytes in which every value is JSON-representable (WriteRawJSONString
+   itself rejects None and Infinity) *)
+VerificationTest[
+    Block[ { $CloudUserUUID = None },
+        With[ { json = readUsageJSON @ usageDataJSON @ productIdentityInfo[ ] },
+            {
+                usageDataJSON @ productIdentityInfo[ ],
+                MatchQ[ Values @ json, { (_Integer|_Real|_String|Null).. } ],
+                json
+            }
+        ]
+    ],
+    { _ByteArray, True, KeyValuePattern @ { "CloudUserUUID" -> "None", "MachineID" -> $MachineID, "SystemID" -> $SystemID } },
+    SameTest -> MatchQ,
+    TestID   -> "ProductIdentityInfo-JSON@@Tests/UsageData.wlt:723,1-736,2"
+]
+
+(* ::**************************************************************************************************************:: *)
+(* ::Section::Closed:: *)
+(*Standalone MCP Server*)
+(* $StandaloneMCPServer and $StandaloneMCPServerInformation (Kernel/Server/Server.wl) are set by the standalone MCP
+   server application and never by the paclet; the payload carries both so that sessions of the standalone product can
+   be told apart from those of a regular kernel. *)
+$standaloneInfo = <|
+    "Version"   -> "1.0.0",
+    "BuildDate" -> DateObject[ { 2026, 8, 1, 12, 0, 0 }, TimeZone -> 0 ],
+    "Something" -> Missing[ "NotAvailable" ]
+|>;
+
+(* Exported and protected like the other exported symbols *)
+VerificationTest[
+    { Context @ $StandaloneMCPServer, Context @ $StandaloneMCPServerInformation },
+    { "Wolfram`AgentTools`", "Wolfram`AgentTools`" },
+    SameTest -> SameQ,
+    TestID   -> "StandaloneMCPServer-Exported@@Tests/UsageData.wlt:751,1-756,2"
+]
+
+VerificationTest[
+    {
+        MemberQ[ Wolfram`AgentTools`$AgentToolsProtectedNames, "Wolfram`AgentTools`$StandaloneMCPServer" ],
+        MemberQ[ Wolfram`AgentTools`$AgentToolsProtectedNames, "Wolfram`AgentTools`$StandaloneMCPServerInformation" ],
+        MemberQ[ Attributes[ "Wolfram`AgentTools`$StandaloneMCPServer" ], Protected ],
+        MemberQ[ Attributes[ "Wolfram`AgentTools`$StandaloneMCPServerInformation" ], Protected ]
+    },
+    { True, True, True, True },
+    SameTest -> SameQ,
+    TestID   -> "StandaloneMCPServer-Protected@@Tests/UsageData.wlt:758,1-768,2"
+]
+
+(* A regular kernel has the defaults *)
+VerificationTest[
+    { $StandaloneMCPServer, $StandaloneMCPServerInformation },
+    { False, <| |> },
+    SameTest -> SameQ,
+    TestID   -> "StandaloneMCPServer-Defaults@@Tests/UsageData.wlt:771,1-776,2"
+]
+
+(* The standalone application sets both; Block stands in for it here, and works despite Protected *)
+VerificationTest[
+    Block[ { $StandaloneMCPServer = True, $StandaloneMCPServerInformation = $standaloneInfo },
+        { $StandaloneMCPServer, $StandaloneMCPServerInformation }
+    ],
+    { True, $standaloneInfo },
+    SameTest -> SameQ,
+    TestID   -> "StandaloneMCPServer-Blockable@@Tests/UsageData.wlt:779,1-786,2"
+]
+
+(* The session file stores both as they are, including values in the information that JSON cannot represent *)
+VerificationTest[
+    Block[ { $StandaloneMCPServer = True, $StandaloneMCPServerInformation = $standaloneInfo },
+        withUsageSession[
+            recordUsageData[ "initialize", $initMessage, $initResponse ];
+            KeyTake[ sessionData[ ], { "StandaloneMCPServer", "StandaloneMCPServerInformation" } ]
+        ]
+    ],
+    <| "StandaloneMCPServer" -> True, "StandaloneMCPServerInformation" -> $standaloneInfo |>,
+    SameTest -> SameQ,
+    TestID   -> "StandaloneMCPServer-SessionFile@@Tests/UsageData.wlt:789,1-799,2"
+]
+
+(* In the JSON, dates in the information become ISO 8601 strings and other values that JSON cannot represent become
+   their InputForm strings *)
+VerificationTest[
+    Block[ { $StandaloneMCPServer = True, $StandaloneMCPServerInformation = $standaloneInfo },
+        withUsageSession[
+            recordUsageData[ "initialize", $initMessage, $initResponse ];
+            KeyTake[ readUsageJSON @ usageDataJSON @ sessionData[ ], { "StandaloneMCPServer", "StandaloneMCPServerInformation" } ]
+        ]
+    ],
+    <|
+        "StandaloneMCPServer"            -> True,
+        "StandaloneMCPServerInformation" -> <|
+            "Version"   -> "1.0.0",
+            "BuildDate" -> "2026-08-01T12:00:00.000Z",
+            "Something" -> "Missing[\"NotAvailable\"]"
+        |>
+    |>,
+    SameTest -> SameQ,
+    TestID   -> "StandaloneMCPServer-JSON@@Tests/UsageData.wlt:803,1-820,2"
+]
+
+(* Values the standalone application must not set: the payload cannot be built, and as with every other tracking
+   failure nothing propagates (the failure is only logged) and no file is written *)
+VerificationTest[
+    {
+        Block[ { $StandaloneMCPServer = "yes" },
+            withUsageSession @ { recordUsageData[ "initialize", $initMessage, $initResponse ], FileExistsQ @ usageStatsFile[ ] }
+        ],
+        Block[ { $StandaloneMCPServerInformation = { "Version" -> "1.0.0" } },
+            withUsageSession @ { recordUsageData[ "initialize", $initMessage, $initResponse ], FileExistsQ @ usageStatsFile[ ] }
+        ]
+    },
+    { { _Failure, False }, { _Failure, False } },
+    SameTest -> MatchQ,
+    TestID   -> "StandaloneMCPServer-InvalidValuesIsolated@@Tests/UsageData.wlt:824,1-836,2"
 ]
 
 (* ::**************************************************************************************************************:: *)
@@ -637,37 +843,43 @@ VerificationTest[
         recordUsageData[ "initialize", $initMessage, $initResponse ];
         recordUsageData[ "tools/call", $toolCallMessage, $toolCallResponse ];
         recordUsageData[ "tools/call", <| "params" -> <| "name" -> "NoSuchTool" |> |>, <| "result" -> <| "isError" -> True |> |> ];
-        Developer`ReadRawJSONString @ usageDataJSON @ usageDataPayload[ ]
+        readUsageJSON @ usageDataJSON @ usageDataPayload[ ]
     ],
     KeyValuePattern @ {
-        "MCPSessionID"      -> _String,
-        "ServerName"        -> "TestServer",
-        "ClientInformation" -> KeyValuePattern[ "clientInfo" -> KeyValuePattern[ "name" -> "test-client" ] ],
-        "Events"            -> {
+        "MCPSessionID"                   -> _String,
+        "ServerName"                     -> "TestServer",
+        "ClientInformation"              -> KeyValuePattern[ "clientInfo" -> KeyValuePattern[ "name" -> "test-client" ] ],
+        "Events"                         -> {
             KeyValuePattern @ { "Type" -> "ToolCall", "Name" -> "PrimeFinder", "Success" -> True, "Timestamp" -> _Real },
             KeyValuePattern @ { "Type" -> "ToolCall", "Name" -> Null, "Success" -> False }
         },
-        "PacletVersion"     -> _String,
-        "WolframVersion"    -> _String,
-        "SystemID"          -> _String,
-        "LastUpdated"       -> _Real
+        "StandaloneMCPServer"            -> False,
+        "StandaloneMCPServerInformation" -> <| |>,
+        "PacletVersion"                  -> _String,
+        "LastUpdated"                    -> _Real,
+        "MachineID"                      -> $MachineID,
+        "LicenseID"                      -> _String,
+        "ProductIDName"                  -> _String,
+        "ReleaseID"                      -> _String,
+        "SystemID"                       -> $SystemID
     },
     SameTest -> MatchQ,
-    TestID   -> "UsageData-JSONPayload@@Tests/UsageData.wlt:635,1-657,2"
+    TestID   -> "UsageData-JSONPayload@@Tests/UsageData.wlt:841,1-868,2"
 ]
 
-(* The JSON is exactly what is stored in the session file *)
+(* The JSON is exactly what is stored in the session file, with the values that JSON cannot represent (e.g. None or
+   Infinity in the product identity information) as their InputForm strings *)
 VerificationTest[
     withUsageSession[
         recordUsageData[ "initialize", $initMessage, $initResponse ];
         recordUsageData[ "tools/call", $toolCallMessage, $toolCallResponse ];
         With[ { stored = sessionData[ ] },
-            KeyDrop[ Developer`ReadRawJSONString @ usageDataJSON @ stored, "LastUpdated" ] === KeyDrop[ stored, "LastUpdated" ]
+            KeyDrop[ readUsageJSON @ usageDataJSON @ stored, "LastUpdated" ] === KeyDrop[ jsonValue /@ stored, "LastUpdated" ]
         ]
     ],
     True,
     SameTest -> SameQ,
-    TestID   -> "UsageData-JSONRoundTrip@@Tests/UsageData.wlt:660,1-671,2"
+    TestID   -> "UsageData-JSONRoundTrip@@Tests/UsageData.wlt:872,1-883,2"
 ]
 
 (* ::**************************************************************************************************************:: *)
@@ -686,14 +898,14 @@ VerificationTest[
     ],
     { True, True, True, True },
     SameTest -> SameQ,
-    TestID   -> "UsageData-KeepAliveTouchesFile@@Tests/UsageData.wlt:676,1-690,2"
+    TestID   -> "UsageData-KeepAliveTouchesFile@@Tests/UsageData.wlt:888,1-902,2"
 ]
 
 VerificationTest[
     withUsageSession[ { touchUsageStatsFile[ ], FileExistsQ @ usageStatsFile[ ] } ],
     { Null, False },
     SameTest -> SameQ,
-    TestID   -> "UsageData-KeepAliveWithoutFile@@Tests/UsageData.wlt:692,1-697,2"
+    TestID   -> "UsageData-KeepAliveWithoutFile@@Tests/UsageData.wlt:904,1-909,2"
 ]
 
 (* ::**************************************************************************************************************:: *)
@@ -715,7 +927,7 @@ VerificationTest[
     ],
     { True, False, False },
     SameTest -> SameQ,
-    TestID   -> "UsageData-StaleUsageFileQ@@Tests/UsageData.wlt:702,1-719,2"
+    TestID   -> "UsageData-StaleUsageFileQ@@Tests/UsageData.wlt:914,1-931,2"
 ]
 
 (* ::**************************************************************************************************************:: *)
@@ -750,7 +962,7 @@ VerificationTest[
     ],
     { { "corrupt", "expired", "finished", "older" }, { "older", "finished" }, { "fresh" }, False },
     SameTest -> SameQ,
-    TestID   -> "SubmitUsageData-SubmitsFinishedSessions@@Tests/UsageData.wlt:727,1-754,2"
+    TestID   -> "SubmitUsageData-SubmitsFinishedSessions@@Tests/UsageData.wlt:939,1-966,2"
 ]
 
 (* A failed submission keeps the file and stops the batch *)
@@ -775,7 +987,7 @@ VerificationTest[
     ],
     { { }, 1, { "first", "second" } },
     SameTest -> SameQ,
-    TestID   -> "SubmitUsageData-FailureStopsBatch@@Tests/UsageData.wlt:757,1-779,2"
+    TestID   -> "SubmitUsageData-FailureStopsBatch@@Tests/UsageData.wlt:969,1-991,2"
 ]
 
 (* While another process holds the lock, this one skips its turn without waiting long *)
@@ -800,14 +1012,14 @@ VerificationTest[
     ],
     { { }, 0, { "finished" }, True },
     SameTest -> SameQ,
-    TestID   -> "SubmitUsageData-LockHeld@@Tests/UsageData.wlt:782,1-804,2"
+    TestID   -> "SubmitUsageData-LockHeld@@Tests/UsageData.wlt:994,1-1016,2"
 ]
 
 VerificationTest[
     submitUsageData @ FileNameJoin @ { $TemporaryDirectory, "does-not-exist-" <> CreateUUID[ ] },
     { },
     SameTest -> SameQ,
-    TestID   -> "SubmitUsageData-NoDirectory@@Tests/UsageData.wlt:806,1-811,2"
+    TestID   -> "SubmitUsageData-NoDirectory@@Tests/UsageData.wlt:1018,1-1023,2"
 ]
 
 (* The current session's file is never submitted, even when it looks old *)
@@ -825,7 +1037,7 @@ VerificationTest[
     ],
     { { }, 0, True },
     SameTest -> SameQ,
-    TestID   -> "SubmitUsageData-CurrentSessionExcluded@@Tests/UsageData.wlt:814,1-829,2"
+    TestID   -> "SubmitUsageData-CurrentSessionExcluded@@Tests/UsageData.wlt:1026,1-1041,2"
 ]
 
 (* ::**************************************************************************************************************:: *)
@@ -843,24 +1055,25 @@ VerificationTest[
     ],
     False,
     SameTest -> SameQ,
-    TestID   -> "SubmitUsagePayload-Unreachable@@Tests/UsageData.wlt:836,1-847,2"
+    TestID   -> "SubmitUsagePayload-Unreachable@@Tests/UsageData.wlt:1048,1-1059,2"
 ]
 
 (* The development endpoint accepts a JSON body (skipped on CI, where network access is not guaranteed) *)
 skipIfGitHubActions @ VerificationTest[
     submitUsagePayload @ <|
-        "MCPSessionID"      -> "AgentToolsTestSuite-" <> CreateUUID[ ],
-        "ServerName"        -> "AgentToolsTestSuite",
-        "ClientInformation" -> Null,
-        "Events"            -> { },
-        "PacletVersion"     -> Wolfram`AgentTools`Common`$pacletVersion,
-        "WolframVersion"    -> $Version,
-        "SystemID"          -> $SystemID,
-        "LastUpdated"       -> AbsoluteTime[ TimeZone -> 0 ]
+        "MCPSessionID"                   -> "AgentToolsTestSuite-" <> CreateUUID[ ],
+        "ServerName"                     -> "AgentToolsTestSuite",
+        "ClientInformation"              -> Null,
+        "Events"                         -> { },
+        "StandaloneMCPServer"            -> False,
+        "StandaloneMCPServerInformation" -> <| |>,
+        "PacletVersion"                  -> Wolfram`AgentTools`Common`$pacletVersion,
+        "LastUpdated"                    -> AbsoluteTime[ TimeZone -> 0 ],
+        productIdentityInfo[ ]
     |>,
     True,
     SameTest -> SameQ,
-    TestID   -> "SubmitUsagePayload-Endpoint@@Tests/UsageData.wlt:850,23-864,2"
+    TestID   -> "SubmitUsagePayload-Endpoint@@Tests/UsageData.wlt:1062,23-1077,2"
 ]
 
 (* ::**************************************************************************************************************:: *)
@@ -881,7 +1094,7 @@ skipIfScript @ VerificationTest[
     ],
     _ProcessObject,
     SameTest -> MatchQ,
-    TestID   -> "UsageData-Integration-ServerStarts@@Tests/UsageData.wlt:877,16-885,2"
+    TestID   -> "UsageData-Integration-ServerStarts@@Tests/UsageData.wlt:1090,16-1098,2"
 ]
 
 skipIfScript @ VerificationTest[
@@ -889,28 +1102,28 @@ skipIfScript @ VerificationTest[
     MCPInitialize[ "ClientName" -> $usageClientName ],
     KeyValuePattern[ "result" -> _Association ],
     SameTest -> MatchQ,
-    TestID   -> "UsageData-Integration-Initialize@@Tests/UsageData.wlt:887,16-893,2"
+    TestID   -> "UsageData-Integration-Initialize@@Tests/UsageData.wlt:1100,16-1106,2"
 ]
 
 skipIfScript @ VerificationTest[
     SendMCPRequest[ "tools/call", <| "name" -> "WolframLanguageEvaluator", "arguments" -> <| "code" -> "Prime[1000]" |> |> ],
     KeyValuePattern[ "result" -> KeyValuePattern[ "isError" -> False ] ],
     SameTest -> MatchQ,
-    TestID   -> "UsageData-Integration-ToolCall@@Tests/UsageData.wlt:895,16-900,2"
+    TestID   -> "UsageData-Integration-ToolCall@@Tests/UsageData.wlt:1108,16-1113,2"
 ]
 
 skipIfScript @ VerificationTest[
     SendMCPRequest[ "tools/call", <| "name" -> "NoSuchTool", "arguments" -> <| |> |> ],
     KeyValuePattern[ "result" -> KeyValuePattern[ "isError" -> True ] ],
     SameTest -> MatchQ,
-    TestID   -> "UsageData-Integration-UnknownToolCall@@Tests/UsageData.wlt:902,16-907,2"
+    TestID   -> "UsageData-Integration-UnknownToolCall@@Tests/UsageData.wlt:1115,16-1120,2"
 ]
 
 skipIfScript @ VerificationTest[
     SendMCPRequest[ "prompts/get", <| "name" -> "NoSuchPrompt", "arguments" -> <| |> |> ],
     KeyValuePattern[ "error" -> _Association ],
     SameTest -> MatchQ,
-    TestID   -> "UsageData-Integration-UnknownPrompt@@Tests/UsageData.wlt:909,16-914,2"
+    TestID   -> "UsageData-Integration-UnknownPrompt@@Tests/UsageData.wlt:1122,16-1127,2"
 ]
 
 skipIfScript @ VerificationTest[
@@ -920,7 +1133,7 @@ skipIfScript @ VerificationTest[
     ],
     _String? FileExistsQ,
     SameTest -> MatchQ,
-    TestID   -> "UsageData-Integration-SessionFileWritten@@Tests/UsageData.wlt:916,16-924,2"
+    TestID   -> "UsageData-Integration-SessionFileWritten@@Tests/UsageData.wlt:1129,16-1137,2"
 ]
 
 skipIfScript @ VerificationTest[
@@ -932,7 +1145,7 @@ skipIfScript @ VerificationTest[
         KeyValuePattern @ { "Type" -> "PromptGet", "Name" -> Null, "Success" -> False }
     },
     SameTest -> MatchQ,
-    TestID   -> "UsageData-Integration-Events@@Tests/UsageData.wlt:926,16-936,2"
+    TestID   -> "UsageData-Integration-Events@@Tests/UsageData.wlt:1139,16-1149,2"
 ]
 
 skipIfScript @ VerificationTest[
@@ -940,11 +1153,16 @@ skipIfScript @ VerificationTest[
         $usageSession[ "ServerName" ],
         $usageSession[ "ClientInformation", "protocolVersion" ],
         StringQ @ $usageSession[ "MCPSessionID" ],
-        FreeQ[ $usageSession, "Prime[1000]" ]
+        FreeQ[ $usageSession, "Prime[1000]" ],
+        SubsetQ[ Keys @ $usageSession, $productIdentityKeys ],
+        $usageSession[ "MachineID" ] === $MachineID, (* the server process runs on this machine *)
+        $usageSession[ "SystemID" ] === $SystemID,
+        $usageSession[ "StandaloneMCPServer" ], (* a regular kernel, not the standalone product *)
+        $usageSession[ "StandaloneMCPServerInformation" ]
     },
-    { "WolframLanguage", "2024-11-05", True, True },
+    { "WolframLanguage", "2024-11-05", True, True, True, True, True, False, <| |> },
     SameTest -> SameQ,
-    TestID   -> "UsageData-Integration-Payload@@Tests/UsageData.wlt:938,16-948,2"
+    TestID   -> "UsageData-Integration-Payload@@Tests/UsageData.wlt:1151,16-1166,2"
 ]
 
 skipIfScript @ VerificationTest[
@@ -953,7 +1171,7 @@ skipIfScript @ VerificationTest[
     FileExistsQ @ $usageFile,
     False,
     SameTest -> SameQ,
-    TestID   -> "UsageData-Integration-Cleanup@@Tests/UsageData.wlt:950,16-957,2"
+    TestID   -> "UsageData-Integration-Cleanup@@Tests/UsageData.wlt:1168,16-1175,2"
 ]
 
 (* ::**************************************************************************************************************:: *)
@@ -971,7 +1189,7 @@ skipIfScript @ VerificationTest[
     ],
     _Missing,
     SameTest -> MatchQ,
-    TestID   -> "UsageData-Integration-OptedOutWritesNothing@@Tests/UsageData.wlt:962,16-975,2"
+    TestID   -> "UsageData-Integration-OptedOutWritesNothing@@Tests/UsageData.wlt:1180,16-1193,2"
 ]
 
 (* ::**************************************************************************************************************:: *)
@@ -981,7 +1199,7 @@ VerificationTest[
     DeleteObject @ $customServer,
     Null,
     SameTest -> MatchQ,
-    TestID   -> "UsageData-Cleanup@@Tests/UsageData.wlt:980,1-985,2"
+    TestID   -> "UsageData-Cleanup@@Tests/UsageData.wlt:1198,1-1203,2"
 ]
 
 (* :!CodeAnalysis::EndBlock:: *)

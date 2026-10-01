@@ -138,6 +138,20 @@ To verify the installation:
 - Click "Manage MCP Servers" at the top right of the panel
 - Verify that "Wolfram" is listed under "Installed MCP Servers"
 
+### DeepSeek Harness
+
+```wl
+InstallMCPServer["DeepSeekHarness", "WolframLanguage"]
+```
+
+This adds the server to `~/.dsh/cordis.patch.yml` (or `$DSH_HOME/cordis.patch.yml`), which applies to every `dsh` profile. Restart `dsh`, then confirm the server is part of the composed configuration:
+
+```shell
+dsh --profile web --dump-config
+```
+
+The output should contain an `agenttools-Wolfram` entry using `@deepseek-ai/dsh-mcp-client`, and the tools are available to the model as `mcp__Wolfram__<tool>`.
+
 ### Goose
 
 ```wl
